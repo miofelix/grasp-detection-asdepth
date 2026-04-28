@@ -1,0 +1,10 @@
+# 勿在 .gitignore 里写 /* —— 会忽略仓库根目录下所有文件，导致无法 git commit
+
+ckpts/
+ckpts/*
+
+logs/
+
+__pycache__/
+*.pyc
+.DS_Store

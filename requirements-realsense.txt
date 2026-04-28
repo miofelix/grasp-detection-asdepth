@@ -1,0 +1,3 @@
+# 仅在连接 Intel RealSense、且 pip 有对应平台 wheel 时安装（常见：Linux x64 / 部分 Windows）。
+# macOS / Apple Silicon：PyPI 往往无包，需查 Intel RealSense SDK 文档或从源码编译，勿强行 pip。
+pyrealsense2>=2.54.0
