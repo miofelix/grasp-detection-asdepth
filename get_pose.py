@@ -107,7 +107,11 @@ def run_anygrasp(save_dir, cfgs, data_dir=None, rgb=None, depth=None):
 # ----------------- 主程序 -----------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint_path", required=True, help="Model checkpoint path")
+    parser.add_argument(
+        "--checkpoint_path",
+        default="ckpts/checkpoint_detection.tar",
+        help="AnyGrasp 2026 detection checkpoint path",
+    )
     parser.add_argument(
         "--max_gripper_width", type=float, default=0.1, help="Maximum gripper width (<=0.1m)"
     )

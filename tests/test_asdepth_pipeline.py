@@ -77,6 +77,7 @@ class PipelineSafetyTests(unittest.TestCase):
         )
 
         self.assertEqual(args.camera_backend, "orbbec")
+        self.assertEqual(args.grasp_checkpoint, "ckpts/checkpoint_detection.tar")
 
     def test_default_run_does_not_import_or_execute_piper(self) -> None:
         with tempfile.TemporaryDirectory() as value:

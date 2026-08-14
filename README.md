@@ -151,18 +151,20 @@ python -c "import MinkowskiEngine; print('MinkowskiEngine: OK')"
 | 文件 | 用途 | 示例路径 |
 | --- | --- | --- |
 | 深度模型 checkpoint | 与 `--depth-model` 所选架构匹配的米制深度模型 | `ckpts/depth_model.ckpt` |
-| AnyGrasp checkpoint | 从点云预测抓取位姿 | `ckpts/checkpoint-rs.tar` |
+| AnyGrasp 2026 detection checkpoint | 从点云预测抓取位姿 | `ckpts/checkpoint_detection.tar` |
 
 建议统一放到仓库的 `ckpts/` 目录：
 
 ```bash
 mkdir -p ckpts
 cp /path/to/depth_model.ckpt ckpts/depth_model.ckpt
-cp /path/to/checkpoint-rs.tar ckpts/checkpoint-rs.tar
+cp /path/to/checkpoint_detection.tar ckpts/checkpoint_detection.tar
 ```
 
 `ckpts/` 已被 `.gitignore` 忽略，不会被误提交。程序支持 `defm_vit_l14_depth` 和
 `defm_stackconv_depth`，并按 `--depth-model` 构建对应模型；权重与所选架构不一致时严格加载会失败。
+AnyGrasp 2026 SDK 必须使用许可证审批邮件提供的新版 `checkpoint_detection.tar`；旧版
+`checkpoint-rs.tar` 的网络结构与当前 GSNet 二进制不兼容。
 
 默认使用安全的权重读取方式。如果必须加载旧式 pickle checkpoint，只能在确认文件来源可信时添加 `--trusted-depth-checkpoint`。
 
@@ -294,7 +296,7 @@ D435 默认使用 `640 × 480 @ 30 FPS`，可通过 `--camera-width`、`--camera
 python asdepth_pipeline.py \
   --depth-checkpoint ckpts/depth_model.ckpt \
   --depth-model defm_vit_l14_depth \
-  --grasp-checkpoint ckpts/checkpoint-rs.tar \
+  --grasp-checkpoint ckpts/checkpoint_detection.tar \
   --rgb-image example_data/color.png \
   --depth-image example_data/depth.png \
   --save-dir debug/asdepth \
@@ -307,7 +309,7 @@ python asdepth_pipeline.py \
 python asdepth_pipeline.py \
   --depth-checkpoint ckpts/depth_model.ckpt \
   --depth-model defm_vit_l14_depth \
-  --grasp-checkpoint ckpts/checkpoint-rs.tar \
+  --grasp-checkpoint ckpts/checkpoint_detection.tar \
   --rgb-image example_data/color.png \
   --depth-image example_data/depth.png \
   --save-dir debug/asdepth \
@@ -325,7 +327,7 @@ python asdepth_pipeline.py \
 python asdepth_pipeline.py \
   --depth-checkpoint ckpts/depth_model.ckpt \
   --depth-model defm_vit_l14_depth \
-  --grasp-checkpoint ckpts/checkpoint-rs.tar \
+  --grasp-checkpoint ckpts/checkpoint_detection.tar \
   --save-dir debug/asdepth \
   --device cuda
 ```
@@ -336,7 +338,7 @@ python asdepth_pipeline.py \
 python asdepth_pipeline.py \
   --depth-checkpoint ckpts/depth_model.ckpt \
   --depth-model defm_vit_l14_depth \
-  --grasp-checkpoint ckpts/checkpoint-rs.tar \
+  --grasp-checkpoint ckpts/checkpoint_detection.tar \
   --camera-backend realsense \
   --save-dir debug/asdepth \
   --device cuda
@@ -399,7 +401,7 @@ debug/asdepth/<本次运行目录>/
 python asdepth_pipeline.py \
   --depth-checkpoint ckpts/depth_model.ckpt \
   --depth-model defm_vit_l14_depth \
-  --grasp-checkpoint ckpts/checkpoint-rs.tar \
+  --grasp-checkpoint ckpts/checkpoint_detection.tar \
   --save-dir debug/asdepth \
   --device cuda \
   --execute-arm

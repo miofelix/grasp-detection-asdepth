@@ -294,7 +294,11 @@ def run_pipeline(R_cam, t_cam, width):
 if __name__ == "__main__":
     # ==== 创建实验保存目录 ====
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint_path", required=True, help="Model checkpoint path")
+    parser.add_argument(
+        "--checkpoint_path",
+        default="ckpts/checkpoint_detection.tar",
+        help="AnyGrasp 2026 detection checkpoint path",
+    )
     parser.add_argument(
         "--max_gripper_width", type=float, default=0.1, help="Maximum gripper width (<=0.1m)"
     )

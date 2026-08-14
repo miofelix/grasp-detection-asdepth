@@ -17,6 +17,8 @@ import numpy as np
 
 from camera_capture import CameraIntrinsics, CaptureResult
 
+DEFAULT_GRASP_CHECKPOINT = "ckpts/checkpoint_detection.tar"
+
 LEGACY_CAMERA_INTRINSICS = CameraIntrinsics(
     fx=616.22601724,
     fy=615.78839082,
@@ -41,8 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--grasp-checkpoint",
-        default="ckpts/checkpoint-rs.tar",
-        help="AnyGrasp checkpoint 路径",
+        default=DEFAULT_GRASP_CHECKPOINT,
+        help="AnyGrasp 2026 detection checkpoint 路径",
     )
     parser.add_argument("--rgb-image", help="离线 RGB 图像；必须与 --depth-image 同时提供")
     parser.add_argument("--depth-image", help="离线 raw depth 图像；必须与 --rgb-image 同时提供")

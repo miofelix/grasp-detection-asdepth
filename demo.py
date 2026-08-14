@@ -16,6 +16,7 @@ CAMERA_INTRINSICS = (488.28772, 488.28772, 315.879547, 213.037033)
 WORKSPACE_LIMITS = (-0.24, 0.40, -0.4, 0.4, 0.0, 3.0)
 DEPTH_SCALE = 1000.0
 DEPTH_TRUNCATION_M = 1.0
+DEFAULT_CHECKPOINT_PATH = "ckpts/checkpoint_detection.tar"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,7 +24,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="使用本项目 D435 场景配置运行 AnyGrasp 离线检测",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--checkpoint_path", required=True, help="Model checkpoint path")
+    parser.add_argument(
+        "--checkpoint_path",
+        default=DEFAULT_CHECKPOINT_PATH,
+        help="AnyGrasp 2026 detection checkpoint path",
+    )
     parser.add_argument("--data-dir", default="example_data", help="RGB-D 数据目录")
     parser.add_argument("--image-prefix", default="test_", help="color/depth 文件名前缀")
     parser.add_argument("--max_gripper_width", type=float, default=0.1)
