@@ -192,6 +192,9 @@ grasp_detection_asdepth/
 └── ...
 ```
 
+运行时会自动创建 `gsnet_versions/license -> ../license`，兼容 GSNet 二进制固定的许可证查找位置；
+该链接已被 `.gitignore` 忽略，不会提交许可证内容。
+
 验证许可证：
 
 ```bash

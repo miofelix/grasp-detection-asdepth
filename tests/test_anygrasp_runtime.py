@@ -135,6 +135,7 @@ class AnyGraspRuntimeTests(unittest.TestCase):
     def test_create_detector_uses_project_license_and_working_directory(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
+            (root / "gsnet_versions").mkdir()
             license_dir = root / "license"
             license_dir.mkdir()
             (license_dir / "licenseCfg.json").write_text("{}", encoding="utf-8")
@@ -156,6 +157,10 @@ class AnyGraspRuntimeTests(unittest.TestCase):
 
             self.assertIsNotNone(detector)
             self.assertEqual(calls, [(root.resolve(), config)])
+            self.assertEqual(
+                (root / "gsnet_versions" / "license").resolve(),
+                license_dir.resolve(),
+            )
 
     def test_create_detector_requires_new_license_layout(self) -> None:
         with (
@@ -163,6 +168,21 @@ class AnyGraspRuntimeTests(unittest.TestCase):
             self.assertRaisesRegex(FileNotFoundError, "licenseCfg.json"),
         ):
             anygrasp_runtime.create_detector(SimpleNamespace(), value)
+
+    def test_prepare_binary_license_dir_rejects_conflicting_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            versions = root / "gsnet_versions"
+            versions.mkdir()
+            license_dir = root / "license"
+            license_dir.mkdir()
+            (license_dir / "licenseCfg.json").write_text("{}", encoding="utf-8")
+            other = root / "other-license"
+            other.mkdir()
+            (versions / "license").symlink_to(other, target_is_directory=True)
+
+            with self.assertRaisesRegex(RuntimeError, "points to"):
+                anygrasp_runtime.prepare_binary_license_dir(root)
 
     def test_predict_grasps_maps_workspace_and_top_down_options(self) -> None:
         group = FakeGraspGroup()

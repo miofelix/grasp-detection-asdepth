@@ -21,6 +21,7 @@ dist/
 /gsnet.so
 /lib_cxx.so
 /license/
+/gsnet_versions/license
 
 __pycache__/
 *.pyc

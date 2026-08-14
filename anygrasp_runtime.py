@@ -108,6 +108,32 @@ def validate_license_dir(project_root: str | Path = PROJECT_ROOT) -> Path:
     return license_dir
 
 
+def prepare_binary_license_dir(project_root: str | Path = PROJECT_ROOT) -> Path:
+    """为 GSNet 的固定许可证查找位置建立到根目录许可证的安全别名。"""
+
+    root = Path(project_root).expanduser().resolve()
+    source = validate_license_dir(root)
+    versions_dir = root / "gsnet_versions"
+    if not versions_dir.is_dir():
+        raise FileNotFoundError(f"AnyGrasp GSNet directory is missing: {versions_dir}")
+    expected = versions_dir / "license"
+    if expected.is_symlink():
+        if expected.resolve() != source:
+            raise RuntimeError(
+                f"GSNet license symlink points to {expected.resolve()}; expected {source}"
+            )
+        return expected
+    if expected.exists():
+        if (expected / "licenseCfg.json").is_file():
+            return expected
+        raise RuntimeError(f"GSNet license path exists but has no licenseCfg.json: {expected}")
+    try:
+        expected.symlink_to(Path("..") / "license", target_is_directory=True)
+    except OSError as exc:
+        raise OSError(f"cannot create GSNet license alias {expected} -> ../license: {exc}") from exc
+    return expected
+
+
 @contextmanager
 def _working_directory(path: Path) -> Iterator[None]:
     previous = Path.cwd()
@@ -122,7 +148,7 @@ def create_detector(config: Any, project_root: str | Path = PROJECT_ROOT) -> Any
     """加载 SDK、校验许可证并创建新版 AnyGrasp detector。"""
 
     root = Path(project_root).expanduser().resolve()
-    validate_license_dir(root)
+    prepare_binary_license_dir(root)
     module = load_gsnet_module(root)
     factory = getattr(module, "create_detector", None)
     if not callable(factory):
