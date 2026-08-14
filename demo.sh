@@ -1,21 +1,15 @@
+#!/usr/bin/env bash
 
+set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CHECKPOINT_PATH="${CHECKPOINT_PATH:-$ROOT/log/checkpoint_detection.tar}"
+DATA_DIR="${DATA_DIR:-$ROOT/example_data}"
 
-###
- # @Author: daniel
- # @Date: 2025-09-02 19:08:15
- # @LastEditTime: 2026-04-28 19:47:56
- # @LastEditors: daniel
- # @Description: 
- # @FilePath: /grasp_detection/demo.sh
- # have a nice day
-### 
-
-
-
-
-
-# conda activate grasp_detection
-
-python demo.py --checkpoint_path log/checkpoint_detection.tar --top_down_grasp  --debug
-
+python "$ROOT/demo.py" \
+  --checkpoint_path "$CHECKPOINT_PATH" \
+  --data-dir "$DATA_DIR" \
+  --image-prefix test_ \
+  --top_down_grasp \
+  --debug \
+  "$@"

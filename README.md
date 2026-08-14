@@ -3,6 +3,10 @@
 本仓库保留师兄原有的 AnyGrasp、点云和 Piper 控制代码，同时新增了一条本地 AS-Depth-2
 RGB-D 推理入口。旧的 `pipline.py` 未修改，仍对应原来的远程 GAVP + AprilTag 流程。
 
+AnyGrasp SDK 资产同步自 `/Users/felix/Projects/anygrasp_sdk` 的 `b8eaafc` 快照；其中
+`grasp_detection` 的最后一项二进制更新为 `ada42fa`（glibc compatibility）。官方 SDK
+源码不在本仓库修改，本项目通过 `anygrasp_runtime.py` 调用其公开接口并注入自己的相机与工作区配置。
+
 ## AS-Depth 抓取入口
 
 新入口的数据流为：
@@ -23,9 +27,9 @@ checkpoint loader 和 RGB-D 预处理。训练、评估、数据集、Web、Tens
 完整链路需要：
 
 - Linux x86-64；
-- CPython 3.10，对应仓库中的
-  `gsnet_versions/gsnet.cpython-310-x86_64-linux-gnu.so`；
-- CUDA、AnyGrasp 许可证及其系统依赖；
+- AnyGrasp 提供 CPython 3.6–3.14 的版本化二进制，运行时按当前 ABI 自动选择；完整 AS-Depth
+  链路建议继续使用 CPython 3.10，以匹配现有部署和依赖组合；
+- CUDA、MinkowskiEngine、新版 AnyGrasp 许可证及其系统依赖；
 - 新入口还需安装 `requirements-realsense.txt`；
 - AS-Depth 和 AnyGrasp checkpoint 均通过外部路径或未跟踪的 `ckpts/` 提供。
 
@@ -38,8 +42,26 @@ python3.10 -m pip install -r requirements-realsense.txt
 ```
 
 完整抓取入口复用现有 `get_pose.py`，而该文件在模块加载时会导入 `pyrealsense2`，所以
-`asdepth_pipeline.py` 的离线 RGB-D 模式同样需要上述 RealSense Python 依赖。为保持最小迁移，
-没有改动师兄的导入结构；仅深度预测可使用下方独立入口绕过这些依赖。
+`asdepth_pipeline.py` 的离线 RGB-D 模式同样需要上述 RealSense Python 依赖。仅深度预测可使用
+下方独立入口绕过 AnyGrasp、RealSense 和 Piper。
+
+### AnyGrasp 新许可证
+
+2026-07 的新版 GSNet 不再支持仓库原有的 `lib_cxx.so` 和旧许可证。先在 Linux 目标机获取 feature ID：
+
+```bash
+python -c "from anygrasp_runtime import load_gsnet_module; print(load_gsnet_module().get_feature_id())"
+```
+
+按上游申请流程取得新许可证后，将整个目录解压到仓库根目录的 `license/`；该目录必须包含
+`licenseCfg.json`，并已被 `.gitignore` 排除。可在目标机验证：
+
+```bash
+python -c "from anygrasp_runtime import load_gsnet_module; load_gsnet_module().check_license('license')"
+```
+
+上游接口和 steering 参数说明见 `USAGE.md`。该文件保持官方内容，其中提到的官方 demo 位于
+`/Users/felix/Projects/anygrasp_sdk/grasp_detection`；本仓库的 `demo.py` 是项目场景入口。
 
 ### macOS 仅深度预测
 
@@ -59,8 +81,8 @@ python asdepth_depth_only.py \
 `run_metadata.json`。它不能生成 AnyGrasp 抓取姿态；完整抓取仍需在 Linux x86-64 环境运行
 `asdepth_pipeline.py`。
 
-现有 GSNet/AnyGrasp 二进制还可能受 CUDA、libstdc++、OpenSSL 1.1 和许可证环境约束，必须在目标
-Linux 服务器上做最终验证。macOS 可运行帮助、静态检查和轻量测试，但不能运行仓库内的 GSNet 二进制。
+GSNet/AnyGrasp 二进制还受 CUDA、MinkowskiEngine、glibc 和许可证环境约束，必须在目标 Linux
+服务器上做最终验证。macOS 可运行帮助、静态检查和轻量测试，但不能运行仓库内的 GSNet 二进制。
 
 ### 离线 RGB-D
 
@@ -108,7 +130,8 @@ python asdepth_pipeline.py ... --execute-arm
 - `pipline.py`：原远程单目深度、AprilTag、AnyGrasp、Piper 流程。
 - `get_pose.py`：RealSense RGB-D 与 AnyGrasp。
 - `grasp_piper.py`：抓取位姿转换和 Piper 控制。
-- `demo.py`：原 AnyGrasp 离线示例。
+- `demo.py`：保留本项目 D435 内参、`test_` 数据前缀和 workspace 的离线示例，通过新版 SDK 接口运行。
+- `demo.sh`：本项目场景启动脚本；可通过 `CHECKPOINT_PATH`、`DATA_DIR` 或附加 CLI 参数覆盖默认值。
 
 ## 测试
 

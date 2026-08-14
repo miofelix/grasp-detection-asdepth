@@ -5,10 +5,8 @@ import cv2
 import open3d as o3d
 from PIL import Image
 import pyrealsense2 as rs
-import torch
 
-from gsnet import AnyGrasp
-from graspnetAPI import GraspGroup
+from anygrasp_runtime import create_detector, predict_grasps
 import datetime
 # ----------------- 参数 -----------------
 
@@ -62,9 +60,7 @@ def capture_one_frame(base_dir):
 
 # ----------------- AnyGrasp Demo -----------------
 def run_anygrasp(save_dir,cfgs,data_dir=None,rgb=None,depth=None):
-    anygrasp = AnyGrasp(cfgs)
-    anygrasp.load_net()
-    print(1)
+    detector = create_detector(cfgs)
     # 读取图像
     colors=None
     depths=None
@@ -82,7 +78,6 @@ def run_anygrasp(save_dir,cfgs,data_dir=None,rgb=None,depth=None):
     # 相机内参（要改成你的相机参数）
     fx, fy = 616.22601724,615.78839082
     cx, cy = 315.33494299,251.59150012
-    scale = 1000.0
     xmin, xmax = -0.10, 0.10
     ymin, ymax = -0.2, 0.07
     zmin, zmax = 0.2, 1.0
@@ -98,22 +93,24 @@ def run_anygrasp(save_dir,cfgs,data_dir=None,rgb=None,depth=None):
     points = np.stack([points_x, points_y, points_z], axis=-1)[mask].astype(np.float32)
     colors = colors[mask].astype(np.float32)
 
+    if len(points) == 0:
+        raise RuntimeError("No valid point remains after depth filtering")
     print("Point cloud range:", points.min(axis=0), points.max(axis=0))
 
     # 推理抓取点
-    gg, cloud = anygrasp.get_grasp(
-        points, colors,
-        lims=lims,
-        apply_object_mask=True,
+    gg = predict_grasps(
+        detector,
+        points,
+        lims,
+        top_down_grasp=bool(getattr(cfgs, "top_down_grasp", False)),
         dense_grasp=False,
-        collision_detection=True
+        collision_detection=True,
     )
 
-    if len(gg) == 0:
+    if gg is None:
         print("No Grasp detected after collision detection!")
         return
 
-    gg = gg.nms().sort_by_score()
     gg_pick = gg[0:20]
 
     print("Top grasp scores:", gg_pick.scores)
@@ -124,6 +121,9 @@ def run_anygrasp(save_dir,cfgs,data_dir=None,rgb=None,depth=None):
 
     # 可视化
     if cfgs.debug:
+        cloud = o3d.geometry.PointCloud()
+        cloud.points = o3d.utility.Vector3dVector(points)
+        cloud.colors = o3d.utility.Vector3dVector(colors)
         trans_mat = np.array([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
         cloud.transform(trans_mat)
         grippers = gg.to_open3d_geometry_list()

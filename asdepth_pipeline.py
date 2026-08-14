@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import argparse
 import gc
-import importlib.util
 import json
-import platform
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -111,43 +109,11 @@ def _load_rgbd_files(
     )
 
 
-def _matching_gsnet_path() -> Path | None:
-    if platform.system() != "Linux" or platform.machine() not in {"x86_64", "AMD64"}:
-        return None
-    tag = f"{sys.version_info.major}{sys.version_info.minor}"
-    candidate = Path(__file__).resolve().parent / "gsnet_versions" / (
-        f"gsnet.cpython-{tag}-x86_64-linux-gnu.so"
-    )
-    return candidate if candidate.is_file() else None
-
-
-def _preload_matching_gsnet() -> None:
-    """优先加载与当前 CPython 匹配的 SDK 二进制，避免误用根目录旧 ``gsnet.so``。"""
-
-    if "gsnet" in sys.modules:
-        return
-    if platform.system() != "Linux" or platform.machine() not in {"x86_64", "AMD64"}:
-        raise RuntimeError("AnyGrasp GSNet in this repository requires Linux x86-64")
-    candidate = _matching_gsnet_path()
-    if candidate is None:
-        raise RuntimeError(
-            "no matching GSNet binary for this Python; use CPython 3.10 with "
-            "gsnet_versions/gsnet.cpython-310-x86_64-linux-gnu.so"
-        )
-    spec = importlib.util.spec_from_file_location("gsnet", candidate)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot create import spec for GSNet binary: {candidate}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["gsnet"] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        sys.modules.pop("gsnet", None)
-        raise
-
-
 def _load_anygrasp_functions() -> tuple[Callable[[str], str], Callable[..., Any]]:
-    _preload_matching_gsnet()
+    from anygrasp_runtime import load_gsnet_module, validate_license_dir
+
+    validate_license_dir()
+    load_gsnet_module()
     from get_pose import capture_one_frame, run_anygrasp
 
     return capture_one_frame, run_anygrasp
