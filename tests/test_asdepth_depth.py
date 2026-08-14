@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import cv2
 import numpy as np
 import torch
 
@@ -12,9 +13,12 @@ import asdepth_depth.api as depth_api
 from asdepth_depth import (
     CheckpointLoadReport,
     LoadedDepthModel,
+    colorize_metric_depth,
+    depth_visualization_range,
     load_checkpoint,
     predict_depth,
     prepare_rgbd_input,
+    save_depth_visualizations,
 )
 from asdepth_depth.models import DeFMRGBDDepth, DeFMStackConvRGBDDepth
 from asdepth_depth.preprocess import metric_depth_from_raw, output_size
@@ -145,6 +149,55 @@ class CheckpointTests(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "unsupported depth model"),
         ):
             depth_api.load_depth_model("model.ckpt", model_id="auto", device="cpu")
+
+
+class VisualizationTests(unittest.TestCase):
+    def test_shared_range_uses_joint_valid_depth_values(self) -> None:
+        raw = np.array([[0.0, 1.0], [2.0, np.nan]], dtype=np.float32)
+        prediction = np.array([[1.5, 2.5], [20.0, -1.0]], dtype=np.float32)
+
+        minimum, maximum = depth_visualization_range(
+            raw,
+            prediction,
+            max_depth_m=10.0,
+            percentile_min=0.0,
+            percentile_max=100.0,
+        )
+
+        self.assertEqual(minimum, 1.0)
+        self.assertEqual(maximum, 2.5)
+
+    def test_colorize_metric_depth_keeps_invalid_pixels_black(self) -> None:
+        depth = np.array([[0.0, 1.0], [2.0, np.nan]], dtype=np.float32)
+
+        visualization = colorize_metric_depth(depth, min_depth_m=1.0, max_depth_m=2.0)
+
+        self.assertEqual(visualization.shape, (2, 2, 3))
+        np.testing.assert_array_equal(visualization[0, 0], [0, 0, 0])
+        np.testing.assert_array_equal(visualization[1, 1], [0, 0, 0])
+        self.assertTrue(np.any(visualization[0, 1] != 0))
+
+    def test_save_depth_visualizations_writes_raw_and_prediction_pngs(self) -> None:
+        raw = np.array([[0, 1000], [2000, 3000]], dtype=np.uint16)
+        prediction = np.array([[np.nan, 1.5], [2.5, 3.5]], dtype=np.float32)
+
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = save_depth_visualizations(
+                directory,
+                raw,
+                prediction,
+                depth_scale=1000.0,
+                max_depth_m=10.0,
+            )
+            raw_visualization = cv2.imread(str(artifacts.raw_depth_path), cv2.IMREAD_COLOR)
+            prediction_visualization = cv2.imread(str(artifacts.prediction_path), cv2.IMREAD_COLOR)
+
+        self.assertIsNotNone(raw_visualization)
+        self.assertIsNotNone(prediction_visualization)
+        self.assertEqual(raw_visualization.shape, (2, 2, 3))
+        self.assertEqual(prediction_visualization.shape, (2, 2, 3))
+        np.testing.assert_array_equal(raw_visualization[0, 0], [0, 0, 0])
+        np.testing.assert_array_equal(prediction_visualization[0, 0], [0, 0, 0])
 
 
 class InferenceTests(unittest.TestCase):

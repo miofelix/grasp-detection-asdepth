@@ -144,6 +144,9 @@ class PipelineSafetyTests(unittest.TestCase):
             self.assertEqual(metadata["model_id"], "defm_vit_l14_depth")
             self.assertEqual(metadata["prediction_unit"], "meter")
             self.assertEqual(np.load(result["prediction"]).shape, (4, 6))
+            self.assertEqual(cv2.imread(result["raw_depth_visualization"]).shape, (4, 6, 3))
+            self.assertEqual(cv2.imread(result["prediction_visualization"]).shape, (4, 6, 3))
+            self.assertTrue(metadata["depth_visualization"]["shared_scale"])
 
     def test_execute_arm_requires_explicit_flag(self) -> None:
         with tempfile.TemporaryDirectory() as value:

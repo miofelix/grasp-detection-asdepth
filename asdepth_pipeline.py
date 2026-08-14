@@ -410,7 +410,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     run_anygrasp = _load_anygrasp_function()
 
-    from asdepth_depth import load_depth_model, predict_depth
+    from asdepth_depth import load_depth_model, predict_depth, save_depth_visualizations
 
     load_started = time.perf_counter()
     loaded = load_depth_model(
@@ -439,6 +439,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     prediction_path = run_dir / "pred_depth.npy"
     np.save(prediction_path, pred_depth)
+    visualizations = save_depth_visualizations(
+        run_dir,
+        raw_depth,
+        pred_depth,
+        depth_scale=resolved_depth_scale,
+        max_depth_m=args.max_depth,
+    )
 
     grasp_started = time.perf_counter()
     grasp_config = _grasp_config(args, grasp_checkpoint, intrinsics)
@@ -478,7 +485,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "grasp_width_m": width,
         "rgb_image": str(rgb_path.resolve()),
         "raw_depth_image": str(depth_path.resolve()),
+        "raw_depth_visualization": str(visualizations.raw_depth_path.resolve()),
         "prediction": str(prediction_path.resolve()),
+        "prediction_visualization": str(visualizations.prediction_path.resolve()),
         "grasp_pose": str(pose_path.resolve()),
         "input_shape": list(color_bgr.shape[:2]),
         "prediction_shape": list(pred_depth.shape),
@@ -499,6 +508,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "height": intrinsics.height,
         },
         "max_depth_m": float(args.max_depth),
+        "depth_visualization": {
+            "colormap": visualizations.colormap,
+            "min_depth_m": visualizations.min_depth_m,
+            "max_depth_m": visualizations.max_depth_m,
+            "percentile_min": visualizations.percentile_min,
+            "percentile_max": visualizations.percentile_max,
+            "invalid_color": "black",
+            "shared_scale": True,
+        },
         "input_size": int(args.input_size),
         "resize_method": args.resize_method,
         "execute_arm_requested": bool(args.execute_arm),
@@ -593,6 +611,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "run_dir": str(run_dir),
         "prediction": str(prediction_path),
+        "raw_depth_visualization": str(visualizations.raw_depth_path),
+        "prediction_visualization": str(visualizations.prediction_path),
         "grasp_pose": str(pose_path),
         "metadata": str(metadata_path),
         "arm_executed": metadata["arm_executed"],

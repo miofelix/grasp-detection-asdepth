@@ -257,12 +257,18 @@ python asdepth_depth_only.py ... --device cuda
 
 ```text
 debug/asdepth-only/run_日期_时间/
+├── raw_depth_vis.png
 ├── pred_depth.npy
+├── pred_depth_vis.png
 └── run_metadata.json
 ```
 
+- `raw_depth_vis.png`：原始深度换算为米后的彩色可视化；
 - `pred_depth.npy`：与输入图像同尺寸的 `float32` 深度数组，单位为米；
+- `pred_depth_vis.png`：预测深度的彩色可视化；
 - `run_metadata.json`：模型、输入路径、设备、参数和耗时。
+
+两张深度可视化使用联合有效深度的 `2%~98%` 百分位共享色标，便于直接比较；无效深度显示为黑色。
 
 如果 MPS 上遇到算子兼容问题，可先改用 `--device cpu` 判断是否为设备问题。
 
@@ -370,7 +376,9 @@ debug/asdepth/<本次运行目录>/
 ├── color.png            # 相机模式生成的对齐目标彩色图
 ├── depth.png            # 相机模式生成的对齐原始深度
 ├── camera_metadata.json # 相机后端、序列号、深度比例和内参
+├── raw_depth_vis.png    # 原始米制深度的彩色可视化
 ├── pred_depth.npy       # 深度模型输出，float32，单位米
+├── pred_depth_vis.png   # 预测米制深度的彩色可视化
 ├── grasp_pose.txt       # 最佳抓取的旋转、平移和夹爪宽度
 ├── run_metadata.json    # 参数、文件路径、设备和耗时
 └── scene_cloud_14b.ply  # 仅 --debug 时可能生成
@@ -382,7 +390,8 @@ debug/asdepth/<本次运行目录>/
 - `t_cam` 是相机坐标系下的三维位置，单位为米；
 - `width` 是建议夹爪开口宽度，单位为米。
 
-建议先检查 `pred_depth.npy`、点云方向和 `grasp_pose.txt`，确认结果合理后再考虑机械臂执行。
+建议先对比 `raw_depth_vis.png` 和 `pred_depth_vis.png`，再检查 `pred_depth.npy`、点云方向和
+`grasp_pose.txt`，确认结果合理后再考虑机械臂执行。
 
 ## 11. 控制 Piper 机械臂
 

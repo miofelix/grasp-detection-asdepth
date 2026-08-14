@@ -131,7 +131,7 @@ def run(args: argparse.Namespace) -> dict[str, str]:
     run_dir = _new_run_dir(args.save_dir)
     color_bgr, raw_depth = _load_rgbd_files(rgb_path, depth_path)
 
-    from asdepth_depth import load_depth_model, predict_depth
+    from asdepth_depth import load_depth_model, predict_depth, save_depth_visualizations
 
     load_started = time.perf_counter()
     loaded = load_depth_model(
@@ -162,6 +162,13 @@ def run(args: argparse.Namespace) -> dict[str, str]:
 
     prediction_path = run_dir / "pred_depth.npy"
     np.save(prediction_path, prediction)
+    visualizations = save_depth_visualizations(
+        run_dir,
+        raw_depth,
+        prediction,
+        depth_scale=args.depth_scale,
+        max_depth_m=args.max_depth,
+    )
     metadata_path = run_dir / "run_metadata.json"
     metadata: dict[str, Any] = {
         "schema_version": "1.0.0",
@@ -174,7 +181,9 @@ def run(args: argparse.Namespace) -> dict[str, str]:
         "depth_checkpoint_stripped_prefixes": list(checkpoint_report.stripped_prefixes),
         "rgb_image": str(rgb_path),
         "raw_depth_image": str(depth_path),
+        "raw_depth_visualization": str(visualizations.raw_depth_path),
         "prediction": str(prediction_path),
+        "prediction_visualization": str(visualizations.prediction_path),
         "input_shape": list(color_bgr.shape[:2]),
         "prediction_shape": list(prediction.shape),
         "prediction_dtype": str(prediction.dtype),
@@ -182,6 +191,15 @@ def run(args: argparse.Namespace) -> dict[str, str]:
         "device": resolved_device,
         "depth_scale": float(args.depth_scale),
         "max_depth_m": float(args.max_depth),
+        "depth_visualization": {
+            "colormap": visualizations.colormap,
+            "min_depth_m": visualizations.min_depth_m,
+            "max_depth_m": visualizations.max_depth_m,
+            "percentile_min": visualizations.percentile_min,
+            "percentile_max": visualizations.percentile_max,
+            "invalid_color": "black",
+            "shared_scale": True,
+        },
         "input_size": int(args.input_size),
         "resize_method": args.resize_method,
         "timings_ms": {
@@ -193,6 +211,8 @@ def run(args: argparse.Namespace) -> dict[str, str]:
     return {
         "run_dir": str(run_dir),
         "prediction": str(prediction_path),
+        "raw_depth_visualization": str(visualizations.raw_depth_path),
+        "prediction_visualization": str(visualizations.prediction_path),
         "metadata": str(metadata_path),
     }
 

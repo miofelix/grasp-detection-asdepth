@@ -13,14 +13,24 @@ from .api import (
 )
 from .checkpoint import CheckpointLoadReport, extract_state_dict, load_checkpoint
 from .preprocess import prepare_rgbd_input
+from .visualization import (
+    DepthVisualizationArtifacts,
+    colorize_metric_depth,
+    depth_visualization_range,
+    save_depth_visualizations,
+)
 
 __all__ = [
     "SUPPORTED_MODEL_IDS",
     "CheckpointLoadReport",
+    "DepthVisualizationArtifacts",
     "LoadedDepthModel",
+    "colorize_metric_depth",
+    "depth_visualization_range",
     "extract_state_dict",
     "load_checkpoint",
     "load_depth_model",
     "predict_depth",
     "prepare_rgbd_input",
+    "save_depth_visualizations",
 ]

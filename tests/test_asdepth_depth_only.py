@@ -64,11 +64,20 @@ class DepthOnlyPipelineTests(unittest.TestCase):
             prediction = np.load(result["prediction"])
             self.assertEqual(prediction.shape, (4, 6))
             self.assertTrue(np.all(prediction == 1.5))
+            raw_visualization = cv2.imread(result["raw_depth_visualization"])
+            prediction_visualization = cv2.imread(result["prediction_visualization"])
+            self.assertEqual(raw_visualization.shape, (4, 6, 3))
+            self.assertEqual(prediction_visualization.shape, (4, 6, 3))
             metadata = json.loads(Path(result["metadata"]).read_text(encoding="utf-8"))
             self.assertEqual(metadata["mode"], "asdepth_depth_only")
             self.assertEqual(metadata["model_id"], "defm_vit_l14_depth")
             self.assertEqual(metadata["prediction_unit"], "meter")
             self.assertEqual(metadata["depth_checkpoint_tensor_count"], 790)
+            self.assertEqual(metadata["raw_depth_visualization"], result["raw_depth_visualization"])
+            self.assertEqual(
+                metadata["prediction_visualization"], result["prediction_visualization"]
+            )
+            self.assertTrue(metadata["depth_visualization"]["shared_scale"])
 
     def test_depth_only_main_reports_missing_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as value:
