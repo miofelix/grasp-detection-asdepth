@@ -34,6 +34,8 @@ class DepthOnlyPipelineTests(unittest.TestCase):
                 [
                     "--depth-checkpoint",
                     str(checkpoint),
+                    "--depth-model",
+                    "defm_vit_l14_depth",
                     "--rgb-image",
                     str(rgb),
                     "--depth-image",
@@ -45,11 +47,14 @@ class DepthOnlyPipelineTests(unittest.TestCase):
                 ]
             )
             loaded = SimpleNamespace(
-                checkpoint=CheckpointLoadReport(checkpoint, "state_dict", 804, ()),
+                checkpoint=CheckpointLoadReport(checkpoint, "state_dict", 790, ()),
                 device=torch.device("cpu"),
+                model_id="defm_vit_l14_depth",
             )
             with (
-                mock.patch.object(asdepth_depth, "load_depth_model", return_value=loaded),
+                mock.patch.object(
+                    asdepth_depth, "load_depth_model", return_value=loaded
+                ),
                 mock.patch.object(
                     asdepth_depth,
                     "predict_depth",
@@ -63,8 +68,9 @@ class DepthOnlyPipelineTests(unittest.TestCase):
             self.assertTrue(np.all(prediction == 1.5))
             metadata = json.loads(Path(result["metadata"]).read_text(encoding="utf-8"))
             self.assertEqual(metadata["mode"], "asdepth_depth_only")
+            self.assertEqual(metadata["model_id"], "defm_vit_l14_depth")
             self.assertEqual(metadata["prediction_unit"], "meter")
-            self.assertEqual(metadata["depth_checkpoint_tensor_count"], 804)
+            self.assertEqual(metadata["depth_checkpoint_tensor_count"], 790)
 
     def test_depth_only_main_reports_missing_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -77,6 +83,8 @@ class DepthOnlyPipelineTests(unittest.TestCase):
                 [
                     "--depth-checkpoint",
                     str(directory / "missing.ckpt"),
+                    "--depth-model",
+                    "defm_vit_l14_depth",
                     "--rgb-image",
                     str(rgb),
                     "--depth-image",

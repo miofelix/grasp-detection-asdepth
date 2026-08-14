@@ -1,22 +1,25 @@
-# RGB-D 抓取检测：AS-Depth + AnyGrasp
+# RGB-D 深度补全与抓取检测
 
-本项目把 RGB-D 图像依次交给 AS-Depth-2 和 AnyGrasp，生成可供机械臂使用的抓取位姿：
+本项目把 RGB-D 图像依次交给所选深度模型和 AnyGrasp，生成可供机械臂使用的抓取位姿：
 
 ```text
 离线 RGB-D 图像或 Intel RealSense
-  → AS-Depth-2 深度预测
+  → 所选深度模型完成深度预测
   → AnyGrasp 2026 抓取检测
   → 抓取位姿文件
   → 可选 Piper 机械臂执行
 ```
 
-项目只支持一个经过验证的深度模型：`defm_stackconv_depth`。默认只运行感知并保存结果，**不会控制机械臂**；只有显式添加 `--execute-arm` 才会执行 Piper 控制代码。
+项目支持两个 checkpoint 架构：`defm_vit_l14_depth`（DeFM ViT-L/14 + DPT decoder）和
+`defm_stackconv_depth`（DeFM ViT-L/14 + stack-conv decoder）。模型架构由 `--depth-model` 明确选择，
+程序不会根据 checkpoint 内容猜测架构。默认只运行感知并保存结果，**不会控制机械臂**；只有显式添加
+`--execute-arm` 才会执行 Piper 控制代码。
 
 ## 先选择你的使用方式
 
 | 目标 | 推荐入口 | 平台 | 需要准备 |
 | --- | --- | --- | --- |
-| 只验证深度模型 | `asdepth_depth_only.py` | macOS 或 Linux | AS-Depth checkpoint、RGB-D 图像 |
+| 只验证深度模型 | `asdepth_depth_only.py` | macOS 或 Linux | 深度模型 checkpoint、RGB-D 图像 |
 | 用离线图像检测抓取 | `asdepth_pipeline.py` | Linux x86-64 | 两个 checkpoint、AnyGrasp 许可证、完整运行环境 |
 | 用 RealSense 在线检测 | `asdepth_pipeline.py` | Linux x86-64 | 上述内容和 Intel RealSense |
 | 控制 Piper 抓取 | `asdepth_pipeline.py --execute-arm` | 现场 Linux 主机 | 上述内容、Piper、CAN、手眼标定和安全确认 |
@@ -49,7 +52,7 @@
 
 仓库中的 AnyGrasp GSNet 二进制覆盖多个 CPython ABI，但 CUDA、PyTorch、MinkowskiEngine、glibc 和其他依赖仍需彼此兼容。普通用户建议统一使用 Python 3.10，减少环境组合问题。
 
-> macOS 可以运行 AS-Depth 深度预测，但不能加载仓库中的 Linux x86-64 AnyGrasp 二进制。
+> macOS 可以运行深度预测，但不能加载仓库中的 Linux x86-64 AnyGrasp 二进制。
 
 ## 2. 使用 Conda 创建环境
 
@@ -100,22 +103,24 @@ python -c "import MinkowskiEngine; print('MinkowskiEngine: OK')"
 
 ## 3. 准备模型文件
 
-模型权重不包含在 Git 仓库中。请从项目维护者或对应上游取得以下两个文件：
+模型权重不包含在 Git 仓库中。请从项目维护者或对应上游取得所选深度模型和 AnyGrasp 的权重文件：
 
 | 文件 | 用途 | 示例路径 |
 | --- | --- | --- |
-| AS-Depth checkpoint | 生成补全后的米制深度图 | `ckpts/asdepth2.ckpt` |
+| `defm_vit_l14_depth` checkpoint | DeFM + DPT 米制深度补全 | `ckpts/defm_vit_l14_depth.ckpt` |
+| `defm_stackconv_depth` checkpoint | DeFM + stack-conv 米制深度补全 | `ckpts/defm_stackconv_depth.ckpt` |
 | AnyGrasp checkpoint | 从点云预测抓取位姿 | `ckpts/checkpoint-rs.tar` |
 
 建议统一放到仓库的 `ckpts/` 目录：
 
 ```bash
 mkdir -p ckpts
-cp /path/to/asdepth2.ckpt ckpts/asdepth2.ckpt
+cp /path/to/depth_model.ckpt ckpts/defm_vit_l14_depth.ckpt
 cp /path/to/checkpoint-rs.tar ckpts/checkpoint-rs.tar
 ```
 
-`ckpts/` 已被 `.gitignore` 忽略，不会被误提交。AS-Depth checkpoint 必须对应本项目唯一支持的 `defm_stackconv_depth` 架构；其他架构的权重会被判定为不兼容。
+`ckpts/` 已被 `.gitignore` 忽略，不会被误提交。程序支持 `defm_vit_l14_depth` 和
+`defm_stackconv_depth`，并按 `--depth-model` 构建对应模型；权重与所选架构不一致时严格加载会失败。
 
 默认使用安全的权重读取方式。如果必须加载旧式 pickle checkpoint，只能在确认文件来源可信时添加 `--trusted-depth-checkpoint`。
 
@@ -178,7 +183,8 @@ example_data/depth.png
 
 ```bash
 python asdepth_depth_only.py \
-  --depth-checkpoint ckpts/asdepth2.ckpt \
+  --depth-checkpoint ckpts/defm_vit_l14_depth.ckpt \
+  --depth-model defm_vit_l14_depth \
   --rgb-image example_data/color.png \
   --depth-image example_data/depth.png \
   --save-dir debug/asdepth-only \
@@ -236,7 +242,8 @@ zmin, zmax = ...
 
 ```bash
 python asdepth_pipeline.py \
-  --depth-checkpoint ckpts/asdepth2.ckpt \
+  --depth-checkpoint ckpts/defm_vit_l14_depth.ckpt \
+  --depth-model defm_vit_l14_depth \
   --grasp-checkpoint ckpts/checkpoint-rs.tar \
   --rgb-image example_data/color.png \
   --depth-image example_data/depth.png \
@@ -248,7 +255,8 @@ python asdepth_pipeline.py \
 
 ```bash
 python asdepth_pipeline.py \
-  --depth-checkpoint ckpts/asdepth2.ckpt \
+  --depth-checkpoint ckpts/defm_vit_l14_depth.ckpt \
+  --depth-model defm_vit_l14_depth \
   --grasp-checkpoint ckpts/checkpoint-rs.tar \
   --rgb-image example_data/color.png \
   --depth-image example_data/depth.png \
@@ -265,7 +273,8 @@ python asdepth_pipeline.py \
 
 ```bash
 python asdepth_pipeline.py \
-  --depth-checkpoint ckpts/asdepth2.ckpt \
+  --depth-checkpoint ckpts/defm_vit_l14_depth.ckpt \
+  --depth-model defm_vit_l14_depth \
   --grasp-checkpoint ckpts/checkpoint-rs.tar \
   --save-dir debug/asdepth \
   --device cuda
@@ -288,7 +297,7 @@ python asdepth_pipeline.py \
 debug/asdepth/<本次运行目录>/
 ├── color.png            # RealSense 模式生成
 ├── depth.png            # RealSense 模式生成的原始深度
-├── pred_depth.npy       # AS-Depth 输出，float32，单位米
+├── pred_depth.npy       # 深度模型输出，float32，单位米
 ├── grasp_pose.txt       # 最佳抓取的旋转、平移和夹爪宽度
 ├── run_metadata.json    # 参数、文件路径、设备和耗时
 └── scene_cloud_14b.ply  # 仅 --debug 时可能生成
@@ -319,7 +328,8 @@ debug/asdepth/<本次运行目录>/
 
 ```bash
 python asdepth_pipeline.py \
-  --depth-checkpoint ckpts/asdepth2.ckpt \
+  --depth-checkpoint ckpts/defm_vit_l14_depth.ckpt \
+  --depth-model defm_vit_l14_depth \
   --grasp-checkpoint ckpts/checkpoint-rs.tar \
   --save-dir debug/asdepth \
   --device cuda \
@@ -332,10 +342,11 @@ python asdepth_pipeline.py \
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--device` | `auto` | AS-Depth 推理设备，例如 `cuda`、`mps` 或 `cpu` |
+| `--depth-model` | 必填 | 显式选择 `defm_vit_l14_depth` 或 `defm_stackconv_depth` |
+| `--device` | `auto` | 深度模型推理设备，例如 `cuda`、`mps` 或 `cpu` |
 | `--depth-scale` | `1000` | 原始深度值除以该数后得到米 |
 | `--max-depth` | `10` | 深度有效上限，单位米 |
-| `--input-size` | `518` | AS-Depth 预处理目标尺寸 |
+| `--input-size` | `518` | 深度模型预处理目标尺寸 |
 | `--resize-method` | `lower_bound` | 预处理缩放方式 |
 | `--max-gripper-width` | `0.1` | AnyGrasp 接受的最大夹爪宽度，单位米 |
 | `--gripper-height` | `0.03` | 夹爪高度，单位米 |
@@ -373,9 +384,10 @@ python asdepth_pipeline.py --help
 
 这是当前代码的已知依赖边界：完整入口会导入 `get_pose.py`。安装 `requirements-realsense.txt`；如果所在平台无法安装，请只运行深度入口，或改到支持 RealSense Python 包的 Linux 环境。
 
-### AS-Depth checkpoint 不兼容
+### 深度模型 checkpoint 不兼容
 
-本项目只支持 `defm_stackconv_depth`。请确认权重对应这个模型，且没有误传 AnyGrasp checkpoint。
+请确认 `--depth-model` 与权重对应：DeFM + DPT 权重使用 `defm_vit_l14_depth`，
+DeFM + stack-conv 权重使用 `defm_stackconv_depth`，同时确认没有误传 AnyGrasp checkpoint。
 
 ### `No valid point remains` 或工作区内没有点
 
@@ -387,13 +399,13 @@ python asdepth_pipeline.py --help
 
 ### 出现 `xFormers is disabled` 或 `xFormers is not available`
 
-单模型桥接会主动使用非 xFormers 路径以保持 checkpoint 参数结构兼容。这类警告本身不代表推理失败；以最终是否成功生成输出为准。
+DeFM 桥接会主动使用非 xFormers 路径以保持 checkpoint 参数结构兼容。这类警告本身不代表推理失败；以最终是否成功生成输出为准。
 
 ## 14. 其他入口
 
-- `asdepth_depth_only.py`：推荐的 AS-Depth 离线验证入口；
+- `asdepth_depth_only.py`：推荐的深度模型离线验证入口；
 - `asdepth_pipeline.py`：推荐的完整抓取入口；
-- `demo.py` / `demo.sh`：只使用 AnyGrasp 的离线场景示例，读取 `test_color.png` 和 `test_depth.png`，不经过 AS-Depth；
+- `demo.py` / `demo.sh`：只使用 AnyGrasp 的离线场景示例，读取 `test_color.png` 和 `test_depth.png`，不经过深度补全模型；
 - `get_pose.py`：RealSense 采集和 AnyGrasp 的底层实现，包含现场相机内参与工作区；
 - `grasp_piper.py`：Piper 坐标转换和控制逻辑；
 - `pipline.py`：历史远程 GAVP + AprilTag 流程，不是新用户推荐入口；
@@ -414,4 +426,4 @@ python -m unittest discover -s tests -v
 
 AnyGrasp SDK 资产基于上游 `graspnet/anygrasp_sdk` 的 2026 接口，本项目通过 `anygrasp_runtime.py` 处理二进制选择、许可证和 steering 适配。
 
-`asdepth_depth/` 只迁入 `defm_stackconv_depth` 推理所需的代码，并包含来自 ByteDance Seed CDM、Meta DINOv2、ETH Zurich DeFM 和 MoGe 的派生实现。训练、评估、数据集、其他模型架构和模型权重均不包含在本仓库中。版权与许可证说明见 `ASDEPTH_NOTICE` 和 `ASDEPTH_LICENSE`。
+`asdepth_depth/` 只迁入 `defm_vit_l14_depth` 和 `defm_stackconv_depth` 推理所需的代码，并包含来自 ByteDance Seed CDM、Meta DINOv2、ETH Zurich DeFM 和 MoGe 的派生实现。训练、评估、数据集、其他模型架构和模型权重均不包含在本仓库中。版权与许可证说明见 `ASDEPTH_NOTICE` 和 `ASDEPTH_LICENSE`。

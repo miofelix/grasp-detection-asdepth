@@ -10,6 +10,7 @@ The stack-convolution decoder contains concepts and code derived from MoGe.
 The DeFM implementation contains code derived from ETH Zurich's DeFM project.
 Individual vendored files retain their original copyright and SPDX notices.
 
-Only the defm_stackconv_depth inference dependency closure was migrated into
-this repository. Training, evaluation, deployment, datasets, other model
-variants, checkpoints, and runtime artifacts were not copied.
+Only the defm_vit_l14_depth and defm_stackconv_depth inference dependency
+closures were migrated into this repository. Training, evaluation,
+deployment, datasets, other model variants, checkpoints, and runtime artifacts
+were not copied.

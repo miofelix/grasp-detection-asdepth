@@ -1,18 +1,24 @@
-"""AS-Depth-2 单模型加载与内存 RGB-D 推理 API。"""
+"""RGB-D 深度模型加载与内存推理 API。"""
 
 from __future__ import annotations
 
 import gc
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import torch
 
 from .checkpoint import CheckpointLoadReport, load_checkpoint
-from .models import DeFMStackConvRGBDDepth
+from .models import DeFMRGBDDepth, DeFMStackConvRGBDDepth
 from .preprocess import prepare_rgbd_input
+
+DepthModelId = Literal["defm_vit_l14_depth", "defm_stackconv_depth"]
+SUPPORTED_MODEL_IDS: tuple[DepthModelId, ...] = (
+    "defm_vit_l14_depth",
+    "defm_stackconv_depth",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +26,7 @@ class LoadedDepthModel:
     model: torch.nn.Module
     device: torch.device
     checkpoint: CheckpointLoadReport
-    model_id: str = "defm_stackconv_depth"
+    model_id: DepthModelId
 
 
 def _device(value: str | torch.device | None) -> torch.device:
@@ -34,28 +40,46 @@ def _device(value: str | torch.device | None) -> torch.device:
     return torch.device("cpu")
 
 
+def _requested_model_id(model_id: str) -> DepthModelId:
+    if model_id not in SUPPORTED_MODEL_IDS:
+        raise ValueError(
+            f"unsupported depth model {model_id!r}; "
+            f"choose one of {', '.join(SUPPORTED_MODEL_IDS)}"
+        )
+    return cast(DepthModelId, model_id)
+
+
+def _create_model(model_id: DepthModelId) -> torch.nn.Module:
+    kwargs: dict[str, Any] = {
+        "encoder": "vitl",
+        "features": 256,
+        "out_channels": (256, 512, 1024, 1024),
+        "pretrained": False,
+        "depth_pretrained": False,
+    }
+    if model_id == "defm_vit_l14_depth":
+        return DeFMRGBDDepth(**kwargs)
+    return DeFMStackConvRGBDDepth(**kwargs)
+
+
 def load_depth_model(
     checkpoint: str | Path,
     *,
+    model_id: str,
     device: str | torch.device | None = "auto",
     trusted_pickle: bool = False,
 ) -> LoadedDepthModel:
-    """严格加载迁移后的 ``defm_stackconv_depth``。"""
+    """按显式 model ID 严格加载受支持的 DeFM checkpoint。"""
 
     active_device = _device(device)
-    model = DeFMStackConvRGBDDepth(
-        encoder="vitl",
-        features=256,
-        out_channels=(256, 512, 1024, 1024),
-        pretrained=False,
-        depth_pretrained=False,
-    )
+    resolved_model_id = _requested_model_id(model_id)
     state_dict, report = load_checkpoint(checkpoint, trusted_pickle=trusted_pickle)
+    model = _create_model(resolved_model_id)
     try:
         incompatible = model.load_state_dict(state_dict, strict=False)
         if incompatible.missing_keys or incompatible.unexpected_keys:
             raise RuntimeError(
-                "AS-Depth checkpoint is incompatible with defm_stackconv_depth: "
+                f"depth checkpoint is incompatible with {resolved_model_id}: "
                 f"missing={len(incompatible.missing_keys)}, "
                 f"unexpected={len(incompatible.unexpected_keys)}"
             )
@@ -66,6 +90,7 @@ def load_depth_model(
         model=model.to(active_device).eval(),
         device=active_device,
         checkpoint=report,
+        model_id=resolved_model_id,
     )
 
 
@@ -79,11 +104,15 @@ def _primary_depth(value: Any) -> torch.Tensor:
             raise ValueError("depth model returned an empty sequence")
         value = value[0]
     if not isinstance(value, torch.Tensor):
-        raise TypeError(f"depth model output must be a tensor, got {type(value).__name__}")
+        raise TypeError(
+            f"depth model output must be a tensor, got {type(value).__name__}"
+        )
     if value.ndim == 4 and value.shape[1] == 1:
         value = value[:, 0]
     if value.ndim != 3 or value.shape[0] != 1:
-        raise ValueError(f"depth model output must be 1xHxW or 1x1xHxW, got {tuple(value.shape)}")
+        raise ValueError(
+            f"depth model output must be 1xHxW or 1x1xHxW, got {tuple(value.shape)}"
+        )
     return value
 
 

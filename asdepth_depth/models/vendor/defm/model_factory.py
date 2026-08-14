@@ -2,7 +2,7 @@
 #
 # This source code is licensed under the Apache License, Version 2.0.
 
-"""只构建 AS-Depth-2 使用的 DeFM ViT-L/14 backbone。"""
+"""只构建当前深度模型使用的 DeFM ViT-L/14 backbone。"""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def create_defm_model(
     pretrained: bool = False,
     pretrained_path: str | None = None,
 ):
-    """构建参数层级与 AS-Depth ``defm_vit_l14`` 一致的模型。"""
+    """构建参数层级与源 ``defm_vit_l14`` 一致的模型。"""
 
     cfg = get_defm_config(model_name)
     model = vits.__dict__[cfg.arch](

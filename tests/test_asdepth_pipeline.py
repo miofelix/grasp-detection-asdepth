@@ -39,6 +39,8 @@ class PipelineSafetyTests(unittest.TestCase):
         values = [
             "--depth-checkpoint",
             str(depth_checkpoint),
+            "--depth-model",
+            "defm_vit_l14_depth",
             "--grasp-checkpoint",
             str(grasp_checkpoint),
             "--rgb-image",
@@ -50,12 +52,17 @@ class PipelineSafetyTests(unittest.TestCase):
         ]
         if execute_arm:
             values.append("--execute-arm")
-        return asdepth_pipeline.build_parser().parse_args(values), depth_checkpoint, grasp_checkpoint
+        return (
+            asdepth_pipeline.build_parser().parse_args(values),
+            depth_checkpoint,
+            grasp_checkpoint,
+        )
 
     def _loaded(self, checkpoint: Path) -> object:
         return SimpleNamespace(
-            checkpoint=CheckpointLoadReport(checkpoint, "state_dict", 804, ()),
+            checkpoint=CheckpointLoadReport(checkpoint, "state_dict", 790, ()),
             device=torch.device("cpu"),
+            model_id="defm_vit_l14_depth",
         )
 
     def test_default_run_does_not_import_or_execute_piper(self) -> None:
@@ -96,6 +103,7 @@ class PipelineSafetyTests(unittest.TestCase):
             self.assertFalse(result["arm_executed"])
             metadata = json.loads(Path(result["metadata"]).read_text(encoding="utf-8"))
             self.assertFalse(metadata["arm_executed"])
+            self.assertEqual(metadata["model_id"], "defm_vit_l14_depth")
             self.assertEqual(metadata["prediction_unit"], "meter")
             self.assertEqual(np.load(result["prediction"]).shape, (4, 6))
 
@@ -111,10 +119,14 @@ class PipelineSafetyTests(unittest.TestCase):
                     "_load_anygrasp_functions",
                     return_value=(
                         mock.Mock(),
-                        mock.Mock(return_value=(np.eye(3), np.array([0.1, 0.2, 0.3]), 0.04)),
+                        mock.Mock(
+                            return_value=(np.eye(3), np.array([0.1, 0.2, 0.3]), 0.04)
+                        ),
                     ),
                 ),
-                mock.patch.object(asdepth_pipeline, "_load_arm_runner", return_value=arm_runner),
+                mock.patch.object(
+                    asdepth_pipeline, "_load_arm_runner", return_value=arm_runner
+                ),
                 mock.patch.object(
                     asdepth_depth,
                     "load_depth_model",
@@ -134,10 +146,19 @@ class PipelineSafetyTests(unittest.TestCase):
     def test_main_converts_expected_type_error_to_exit_code_two(self) -> None:
         stderr = io.StringIO()
         with (
-            mock.patch.object(asdepth_pipeline, "run", side_effect=TypeError("invalid checkpoint")),
+            mock.patch.object(
+                asdepth_pipeline, "run", side_effect=TypeError("invalid checkpoint")
+            ),
             mock.patch("sys.stderr", stderr),
         ):
-            exit_code = asdepth_pipeline.main(["--depth-checkpoint", "model.ckpt"])
+            exit_code = asdepth_pipeline.main(
+                [
+                    "--depth-checkpoint",
+                    "model.ckpt",
+                    "--depth-model",
+                    "defm_vit_l14_depth",
+                ]
+            )
 
         self.assertEqual(exit_code, 2)
         self.assertIn("invalid checkpoint", stderr.getvalue())

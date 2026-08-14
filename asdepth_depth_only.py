@@ -1,7 +1,7 @@
-"""离线 RGB-D → AS-Depth-2 深度预测入口。
+"""离线 RGB-D 深度预测入口。
 
 该入口不导入 AnyGrasp、RealSense 或 Piper，适合在 macOS 上验证
-AS-Depth 的模型与预处理。完整抓取流程仍使用 ``asdepth_pipeline.py``。
+深度模型与预处理。完整抓取流程仍使用 ``asdepth_pipeline.py``。
 """
 
 from __future__ import annotations
@@ -21,16 +21,32 @@ import numpy as np
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="使用离线 RGB-D 图像运行 AS-Depth-2 深度预测（不需要 AnyGrasp/RealSense/Piper）",
+        description="使用离线 RGB-D 图像运行所选深度模型（不需要 AnyGrasp/RealSense/Piper）",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--depth-checkpoint", required=True, help="AS-Depth-2 checkpoint 路径")
+    parser.add_argument(
+        "--depth-checkpoint", required=True, help="深度模型 checkpoint 路径"
+    )
+    parser.add_argument(
+        "--depth-model",
+        choices=["defm_vit_l14_depth", "defm_stackconv_depth"],
+        required=True,
+        help="checkpoint 对应的模型架构",
+    )
     parser.add_argument("--rgb-image", required=True, help="离线 RGB 图像路径")
     parser.add_argument("--depth-image", required=True, help="离线 raw depth 图像路径")
-    parser.add_argument("--save-dir", default="debug/asdepth-only", help="运行产物根目录")
-    parser.add_argument("--device", default="auto", help="推理设备，例如 mps、cpu、cuda、cuda:0")
-    parser.add_argument("--depth-scale", type=float, default=1000.0, help="raw depth 到 meter 的除数")
-    parser.add_argument("--max-depth", type=float, default=10.0, help="raw depth 有效上限，单位 meter")
+    parser.add_argument(
+        "--save-dir", default="debug/asdepth-only", help="运行产物根目录"
+    )
+    parser.add_argument(
+        "--device", default="auto", help="推理设备，例如 mps、cpu、cuda、cuda:0"
+    )
+    parser.add_argument(
+        "--depth-scale", type=float, default=1000.0, help="raw depth 到 meter 的除数"
+    )
+    parser.add_argument(
+        "--max-depth", type=float, default=10.0, help="raw depth 有效上限，单位 meter"
+    )
     parser.add_argument("--input-size", type=int, default=518)
     parser.add_argument(
         "--resize-method",
@@ -40,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--trusted-depth-checkpoint",
         action="store_true",
-        help="允许使用 pickle 读取受信任的旧 AS-Depth checkpoint",
+        help="允许使用 pickle 读取受信任的旧深度模型 checkpoint",
     )
     return parser
 
@@ -81,7 +97,9 @@ def _load_rgbd_files(
     if depth.ndim != 2:
         raise ValueError(f"raw depth image must be single-channel, got {depth.shape}")
     if depth.shape != color.shape[:2]:
-        raise ValueError(f"RGB/depth spatial mismatch: rgb={color.shape[:2]}, depth={depth.shape}")
+        raise ValueError(
+            f"RGB/depth spatial mismatch: rgb={color.shape[:2]}, depth={depth.shape}"
+        )
     return (
         np.ascontiguousarray(color, dtype=np.uint8),
         np.ascontiguousarray(depth),
@@ -108,7 +126,9 @@ def _write_metadata(path: Path, metadata: dict[str, Any]) -> None:
 
 
 def run(args: argparse.Namespace) -> dict[str, str]:
-    depth_checkpoint = _resolve_file(args.depth_checkpoint, label="AS-Depth checkpoint")
+    depth_checkpoint = _resolve_file(
+        args.depth_checkpoint, label="depth model checkpoint"
+    )
     rgb_path = _resolve_file(args.rgb_image, label="RGB image")
     depth_path = _resolve_file(args.depth_image, label="raw depth image")
     run_dir = _new_run_dir(args.save_dir)
@@ -119,12 +139,14 @@ def run(args: argparse.Namespace) -> dict[str, str]:
     load_started = time.perf_counter()
     loaded = load_depth_model(
         depth_checkpoint,
+        model_id=args.depth_model,
         device=args.device,
         trusted_pickle=args.trusted_depth_checkpoint,
     )
     load_ms = (time.perf_counter() - load_started) * 1000.0
     checkpoint_report = loaded.checkpoint
     resolved_device = str(loaded.device)
+    resolved_model_id = loaded.model_id
     depth_started = time.perf_counter()
     try:
         prediction = predict_depth(
@@ -148,7 +170,7 @@ def run(args: argparse.Namespace) -> dict[str, str]:
         "schema_version": "1.0.0",
         "mode": "asdepth_depth_only",
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "model_id": "defm_stackconv_depth",
+        "model_id": resolved_model_id,
         "depth_checkpoint": str(depth_checkpoint),
         "depth_checkpoint_source_key": checkpoint_report.source_key,
         "depth_checkpoint_tensor_count": checkpoint_report.tensor_count,
@@ -184,7 +206,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     _validate_args(parser, args)
     try:
         result = run(args)
-    except (FileNotFoundError, ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+    except (
+        FileNotFoundError,
+        ImportError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
         print(f"asdepth_depth_only: error: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
