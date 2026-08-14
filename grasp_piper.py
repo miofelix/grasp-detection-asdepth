@@ -1,330 +1,632 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""Piper motion planning and guarded hardware execution."""
+
+from __future__ import annotations
 
 import argparse
+import json
 import math
 import time
+from contextlib import suppress
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
 
 import numpy as np
-import open3d as o3d
-from piper_sdk import C_PiperInterface_V2
 
-from camera_capture import capture_one_frame
-from get_pose import run_anygrasp
-
-
-def to_um(m):  # 米 → 微米（mm*1e3 == um）
-    return int(round(m * 1e6))
-
-
-def deg_to_mdeg(deg):  # 度 → 毫度
-    return int(round(deg * 1e3))
-
-
-def rad2deg(angles):
-    return tuple(np.degrees(angles))
-
-
-def euler_zyx(R):
-    """
-    欧拉顺序 ZYX（yaw-pitch-roll），对应 R = Rz * Ry * Rx
-    返回 (rx, ry, rz) = (roll_x, pitch_y, yaw_z)，单位：弧度
-    """
-    # pitch = asin(-r31)
-    pitch = math.asin(-R[2, 0])
-    # roll  = atan2(r32, r33)
-    roll = math.atan2(R[2, 1], R[2, 2])
-    # yaw   = atan2(r21, r11)
-    yaw = math.atan2(R[1, 0], R[0, 0])
-    return roll, pitch, yaw
-
-
-def euler_xyz(R):
-    """
-    欧拉顺序 XYZ（rx-ry-rz），对应 R = Rx * Ry * Rz
-    返回 (rx, ry, rz)，单位：弧度
-    """
-    # ry = asin(-r13)
-    ry = math.asin(-R[0, 2])
-    # rx = atan2(r23, r33)
-    rx = math.atan2(R[1, 2], R[2, 2])
-    # rz = atan2(r12, r11)
-    rz = math.atan2(R[0, 1], R[0, 0])
-    return rx, ry, rz
-
-    # ------- ZYX 欧拉角分解（R = Rz * Ry * Rx）-------
-
-
-def clamp(x, lo=-1.0, hi=1.0):
-    return min(max(x, lo), hi)
-
-
-GRIPPER_DISTANCE = 0.07
-T_cam2base = np.array(
+DEFAULT_DEVICE_CONFIG_PATH = "config/piper_device.json"
+DEFAULT_T_CAM_TO_BASE = np.array(
     [
         [-0.03188415, -0.64642446, 0.7623115, -0.02826907],
         [-0.99742629, -0.02842686, -0.06582336, -0.2205848],
         [0.06421995, -0.76244825, -0.64385438, 0.57842954],
         [0.0, 0.0, 0.0, 1.0],
-    ]
+    ],
+    dtype=np.float64,
 )
 
 
-def visualize_pose_with_origin(T):
-    t = T[:3, 3]
-    R = T[:3, :3]
+@dataclass(frozen=True)
+class ArmPose:
+    x_m: float
+    y_m: float
+    z_m: float
+    rx_deg: float
+    ry_deg: float
+    rz_deg: float
 
-    # 基座原点坐标系 (大一点，代表世界坐标)
-    origin_axes = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2)
+    def command(self) -> tuple[int, int, int, int, int, int]:
+        return (
+            _meters_to_micrometers(self.x_m),
+            _meters_to_micrometers(self.y_m),
+            _meters_to_micrometers(self.z_m),
+            _degrees_to_millidegrees(self.rx_deg),
+            _degrees_to_millidegrees(self.ry_deg),
+            _degrees_to_millidegrees(self.rz_deg),
+        )
 
-    # 物体坐标系 (小一点，代表检测到的姿态)
-    obj_axes = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-    obj_axes.rotate(R, center=[0, 0, 0])
-    obj_axes.translate(t)
 
-    # 小球标记物体位置
-    sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.015)
-    sphere.paint_uniform_color([0.8, 0.8, 0.8])
-    sphere.translate(t)
+@dataclass(frozen=True)
+class ArmSafetyConfig:
+    can_name: str = "can2"
+    motion_speed_percent: int = 10
+    gripper_max_width_m: float = 0.07
+    tool_offset_m: float = 0.07
+    pregrasp_clearance_m: float = 0.15
+    lift_distance_m: float = 0.10
+    max_reach_m: float = 0.62
+    min_z_m: float = 0.05
+    max_z_m: float = 0.60
+    max_abs_x_m: float = 0.50
+    max_abs_y_m: float = 0.50
+    enable_timeout_s: float = 5.0
+    move_timeout_s: float = 12.0
+    gripper_timeout_s: float = 8.0
+    position_tolerance_m: float = 0.005
+    angle_tolerance_deg: float = 5.0
+    gripper_tolerance_m: float = 0.003
 
-    # 一条线：从原点到物体位置
-    line_points = [[0, 0, 0], t.tolist()]
-    lines = [[0, 1]]
-    colors = [[1, 0, 1]]  # 紫色
-    line_set = o3d.geometry.LineSet(
-        points=o3d.utility.Vector3dVector(line_points),
-        lines=o3d.utility.Vector2iVector(lines),
+    def __post_init__(self) -> None:
+        if not self.can_name:
+            raise ValueError("Piper CAN interface name must not be empty")
+        if not 1 <= self.motion_speed_percent <= 100:
+            raise ValueError("Piper motion speed must be between 1 and 100 percent")
+        if not 0 < self.gripper_max_width_m <= 0.10:
+            raise ValueError("Piper gripper maximum width must be in (0, 0.10] meter")
+        if self.tool_offset_m <= 0 or self.pregrasp_clearance_m <= 0:
+            raise ValueError("Piper tool offset and pregrasp clearance must be positive")
+        if self.lift_distance_m <= 0 or self.max_reach_m <= 0:
+            raise ValueError("Piper lift distance and maximum reach must be positive")
+        if not 0 <= self.min_z_m < self.max_z_m:
+            raise ValueError("Piper Z safety range is invalid")
+        if self.max_abs_x_m <= 0 or self.max_abs_y_m <= 0:
+            raise ValueError("Piper X/Y safety limits must be positive")
+        if min(self.enable_timeout_s, self.move_timeout_s, self.gripper_timeout_s) <= 0:
+            raise ValueError("Piper operation timeouts must be positive")
+
+
+@dataclass(frozen=True)
+class ArmMotionPlan:
+    detected_object_pose: ArmPose
+    ready_pose: ArmPose
+    pregrasp_pose: ArmPose
+    grasp_pose: ArmPose
+    lift_pose: ArmPose
+    gripper_open_width_m: float
+    gripper_grasp_width_m: float
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _resolve_device_config_path(path: str | Path) -> Path:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path(__file__).resolve().parent / candidate
+    resolved = candidate.resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"Piper device config does not exist: {resolved}")
+    return resolved
+
+
+def _validate_camera_to_base(value: Any) -> np.ndarray:
+    transform = np.asarray(value, dtype=np.float64)
+    if transform.shape != (4, 4) or not np.isfinite(transform).all():
+        raise ValueError("Piper camera_to_base must be a finite 4x4 matrix")
+    if not np.allclose(transform[3], [0.0, 0.0, 0.0, 1.0], atol=1e-6):
+        raise ValueError("Piper camera_to_base has an invalid homogeneous last row")
+    _validate_rotation(transform[:3, :3])
+    return transform
+
+
+def load_device_config(
+    path: str | Path = DEFAULT_DEVICE_CONFIG_PATH,
+    *,
+    arm_side: str | None = None,
+    can_name: str | None = None,
+    motion_speed_percent: int | None = None,
+    gripper_max_width_m: float | None = None,
+    tool_offset_m: float | None = None,
+    pregrasp_clearance_m: float | None = None,
+    lift_distance_m: float | None = None,
+    max_reach_m: float | None = None,
+    min_z_m: float | None = None,
+    max_z_m: float | None = None,
+) -> tuple[np.ndarray, ArmSafetyConfig, dict[str, Any]]:
+    """Load the selected arm, calibration and safety settings from JSON."""
+
+    config_path = _resolve_device_config_path(path)
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid Piper device config JSON: {config_path}: {exc}") from exc
+    if data.get("schema_version") != "1.0.0":
+        raise ValueError(f"unsupported Piper device config schema: {data.get('schema_version')}")
+
+    selected_side = arm_side or data.get("active_arm")
+    arms = data.get("arms")
+    if not isinstance(arms, dict) or selected_side not in arms:
+        raise ValueError(f"Piper arm '{selected_side}' is not defined in {config_path}")
+    arm = arms[selected_side]
+    if not isinstance(arm, dict):
+        raise ValueError(f"Piper arm '{selected_side}' config must be an object")
+    if not arm.get("enabled", False):
+        reason = arm.get("disabled_reason", "arm is disabled")
+        raise RuntimeError(f"Piper arm '{selected_side}' is disabled: {reason}")
+    camera_to_base_value = arm.get("camera_to_base")
+    if camera_to_base_value is None:
+        raise ValueError(f"Piper arm '{selected_side}' has no camera_to_base calibration")
+    camera_to_base = _validate_camera_to_base(camera_to_base_value)
+
+    motion = data.get("motion")
+    if not isinstance(motion, dict):
+        raise ValueError("Piper device config is missing the motion object")
+
+    def setting(name: str, override: Any) -> Any:
+        if override is not None:
+            return override
+        if name not in motion:
+            raise ValueError(f"Piper device config motion.{name} is missing")
+        return motion[name]
+
+    resolved_can_name = arm.get("can_interface") if can_name is None else can_name
+    safety = ArmSafetyConfig(
+        can_name=str(resolved_can_name or "").strip(),
+        motion_speed_percent=int(setting("motion_speed_percent", motion_speed_percent)),
+        gripper_max_width_m=float(setting("gripper_max_width_m", gripper_max_width_m)),
+        tool_offset_m=float(setting("tool_offset_m", tool_offset_m)),
+        pregrasp_clearance_m=float(setting("pregrasp_clearance_m", pregrasp_clearance_m)),
+        lift_distance_m=float(setting("lift_distance_m", lift_distance_m)),
+        max_reach_m=float(setting("max_reach_m", max_reach_m)),
+        min_z_m=float(setting("min_z_m", min_z_m)),
+        max_z_m=float(setting("max_z_m", max_z_m)),
+        max_abs_x_m=float(setting("max_abs_x_m", None)),
+        max_abs_y_m=float(setting("max_abs_y_m", None)),
+        enable_timeout_s=float(setting("enable_timeout_s", None)),
+        move_timeout_s=float(setting("move_timeout_s", None)),
+        gripper_timeout_s=float(setting("gripper_timeout_s", None)),
+        position_tolerance_m=float(setting("position_tolerance_m", None)),
+        angle_tolerance_deg=float(setting("angle_tolerance_deg", None)),
+        gripper_tolerance_m=float(setting("gripper_tolerance_m", None)),
     )
-    line_set.colors = o3d.utility.Vector3dVector(colors)
-
-    # 显示
-    o3d.visualization.draw_geometries([origin_axes, obj_axes, sphere, line_set])
-
-
-def move_with_check(piper, X, Y, Z, RX, RY, RZ, pos_tol=5_000, ang_tol=5_000, max_iter=1000):
-    """
-    控制机械臂移动并等待收敛
-    - piper: 控制接口
-    - (X,Y,Z): 目标位置 (μm)
-    - (RX,RY,RZ): 目标姿态 (毫度)
-    - pos_tol: 位置误差阈值 (μm)
-    - ang_tol: 姿态误差阈值 (毫度)
-    - max_iter: 循环最大次数，防止死循环
-    """
-    cnt = 0
-    while True:
-        cnt += 1
-        piper.EndPoseCtrl(X, Y, Z, RX, RY, RZ)
-        ep = piper.GetArmEndPoseMsgs().end_pose
-
-        if (
-            abs(ep.RX_axis - X) < pos_tol
-            and abs(ep.RY_axis - Y) < pos_tol
-            and abs(ep.RZ_axis - Z) < pos_tol
-            and abs(ep.Rx - RX) < ang_tol
-            and abs(ep.Ry - RY) < ang_tol
-            and abs(ep.Rz - RZ) < ang_tol
-        ):
-            break
-        if cnt > max_iter:
-            print("❌ 到位超时，退出循环")
-            break
-        time.sleep(0.005)
+    metadata = {
+        "config_path": str(config_path),
+        "device_name": str(data.get("device_name", "unknown")),
+        "arm_side": str(selected_side),
+        "can_interface": safety.can_name,
+        "camera_to_base": camera_to_base.tolist(),
+    }
+    return camera_to_base, safety, metadata
 
 
-def to_range_minus90_90(angle_deg: float) -> float:
-    """
-    输入: 任意角度 (度)
-    输出: 在 [-90, 90] 内，与输入等价 (相差 180° 以内)
-    """
-    # 映射到 [-180,180)
-    angle = (angle_deg + 180) % 360 - 180
-    # 如果超出 [-90,90]，则加/减180翻转
-    if angle > 90:
-        angle -= 180
-    elif angle < -90:
-        angle += 180
+def _meters_to_micrometers(value: float) -> int:
+    return int(round(value * 1e6))
+
+
+def _degrees_to_millidegrees(value: float) -> int:
+    return int(round(value * 1e3))
+
+
+def _euler_zyx(rotation: np.ndarray) -> tuple[float, float, float]:
+    """Return roll, pitch and yaw in radians for ``R = Rz * Ry * Rx``."""
+
+    pitch = math.asin(float(np.clip(-rotation[2, 0], -1.0, 1.0)))
+    roll = math.atan2(float(rotation[2, 1]), float(rotation[2, 2]))
+    yaw = math.atan2(float(rotation[1, 0]), float(rotation[0, 0]))
+    return roll, pitch, yaw
+
+
+def _normalize_gripper_angle(angle_deg: float) -> float:
+    """Map an equivalent parallel-gripper angle to the conservative [-90, 90] range."""
+
+    angle = (angle_deg + 180.0) % 360.0 - 180.0
+    if angle > 90.0:
+        angle -= 180.0
+    elif angle < -90.0:
+        angle += 180.0
     return angle
 
 
-def run_pipeline(R_cam, t_cam, width):
-    T_cam2obj = np.eye(4, dtype=float)
-    T_cam2obj[:3, :3] = R_cam
-    T_cam2obj[:3, 3] = t_cam
-    # ===== 1) 可视化原始位姿坐标系=====
-    R_base_orig = (T_cam2base @ T_cam2obj)[:3, :3]
-    p_base_orig = (T_cam2base @ T_cam2obj)[:3, 3]
-    rx0, ry0, rz0 = euler_zyx(R_base_orig)
-    rx0_d, ry0_d, rz0_d = np.degrees([rx0, ry0, rz0])
-    print("原始位姿 x y z (m):", *[f"{v:.8f}" for v in p_base_orig])
-    print("原始位姿 rx ry rz (deg):", *[f"{v:.8f}" for v in (rx0_d, ry0_d, rz0_d)])
+def _validate_rotation(rotation: np.ndarray) -> None:
+    if rotation.shape != (3, 3) or not np.isfinite(rotation).all():
+        raise ValueError(f"invalid AnyGrasp rotation matrix: shape={rotation.shape}")
+    if not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-3):
+        raise ValueError("AnyGrasp rotation matrix is not orthonormal")
+    determinant = float(np.linalg.det(rotation))
+    if not math.isclose(determinant, 1.0, abs_tol=1e-3):
+        raise ValueError(f"AnyGrasp rotation determinant must be 1, got {determinant:.6f}")
 
-    # ===== 2) 轴系映射（在物体局部做重排：右乘）=====
-    # 目标：new_x = old_z, new_y = old_y, new_z = old_x
-    M = np.eye(4, dtype=float)
-    M[:3, :3] = np.array(
-        [
-            [0, 0, 1],  # new_x ← old_z
-            [0, -1, 0],  # new_y ← -old_y
-            [1, 0, 0],  # new_z ← old_x
-        ],
-        dtype=float,
-    )
-    T_cam2obj = T_cam2obj @ M
 
-    # ===== 3) 在物体局部 z 轴方向后退 10 cm（右乘）=====
-    distance = GRIPPER_DISTANCE  # 10 cm
-    delta = np.eye(4, dtype=float)
-    delta[:3, 3] = np.array([0, 0, -distance], dtype=float)
-    T_cam2obj = T_cam2obj @ delta
-
-    distance_mid = 0.15
-    delta_mid = np.eye(4, dtype=float)
-    delta_mid[:3, 3] = np.array([0, 0, -distance_mid], dtype=float)
-    T_cam2obj_mid = T_cam2obj @ delta_mid
-    # ===== 4) 左乘到基座坐标系 =====
-    T_base2obj = T_cam2base @ T_cam2obj
-    T_base2obj_mid = T_cam2base @ T_cam2obj_mid
-    # ===== 5) 提取基座下的姿态与位置 =====
-    R_base = T_base2obj[:3, :3].copy()
-    p_base = T_base2obj[:3, 3].copy()  # (x,y,z) in meters
-    p_mid = T_base2obj_mid[:3, 3].copy()
-    # visualize_pose_with_origin(T_base2obj)
-
-    rx, ry, rz = euler_zyx(R_base)
-    rx_d, ry_d, rz_d = np.degrees([rx, ry, rz])
-
-    print("退回10cm后 x y z (m):", *[f"{v:.8f}" for v in p_base])
-    print("退回10cm后 rx ry rz (deg):", *[f"{v:.8f}" for v in (rx_d, ry_d, rz_d)])
-    print("退回10cm后再退15cm x y z (m):", *[f"{v:.8f}" for v in p_mid])
-    X_mid, Y_mid, Z_mid = map(to_um, p_mid)
-
-    X, Y, Z = map(to_um, p_base)
-
-    # 2) SDK期望：位置=mm*1e3(即 μm)，角度=deg*1e3(毫度)
-    RX, RY, RZ = (
-        deg_to_mdeg(to_range_minus90_90(rx0_d)),
-        deg_to_mdeg(to_range_minus90_90(ry0_d) + 85),
-        deg_to_mdeg(to_range_minus90_90(rz0_d)),
+def _pose_from_transform(transform: np.ndarray, angles_deg: tuple[float, float, float]) -> ArmPose:
+    translation = transform[:3, 3]
+    return ArmPose(
+        x_m=float(translation[0]),
+        y_m=float(translation[1]),
+        z_m=float(translation[2]),
+        rx_deg=float(angles_deg[0]),
+        ry_deg=float(angles_deg[1]),
+        rz_deg=float(angles_deg[2]),
     )
 
-    print("Target (um, mdeg):", X, Y, Z, RX, RY, RZ)
 
-    piper = C_PiperInterface_V2("can0")
-    piper.ConnectPort()
-    while not piper.EnablePiper():
-        time.sleep(0.01)
-    piper.GripperCtrl(0, 1000, 0x02, 0)
-    piper.GripperCtrl(0, 1000, 0x01, 0)
-    # 1)张开两只夹爪（如有）
-    range = 90
-    count = 0
-    while True:
-        count += 1
-        piper.GripperCtrl(abs(round(range * 1000)), 1000, 0x01, 0)
-        g = piper.GetArmGripperMsgs().gripper_state.grippers_angle
-        if g > 80000:
-            break
-        time.sleep(0.005)
-    print("已张开夹爪")
-    # 运动参数
-    piper.MotionCtrl_2(0x01, 0x00, 15, 0x00)  # 速度等
-    piper.EndPoseCtrl(15_000, 0, 275_000, 0, 85_000, 0)
-    print("夹爪已运动到零点上方")
-    time.sleep(1.0)
+def build_motion_plan(
+    rotation_camera: np.ndarray,
+    translation_camera: np.ndarray,
+    grasp_width_m: float,
+    *,
+    safety: ArmSafetyConfig | None = None,
+    camera_to_base: np.ndarray | None = None,
+) -> ArmMotionPlan:
+    """Create and validate a hardware-independent Piper motion plan."""
 
-    # 2) 移动到水杯上方 15 cm
-    target_Z = Z + int(100e3)
-    move_with_check(piper, X_mid, Y_mid, Z_mid, RX, RY, RZ)
-    time.sleep(1.0)
-    print("已移动到水杯后方 15 cm")
+    config = safety or ArmSafetyConfig()
+    base_from_camera = _validate_camera_to_base(
+        DEFAULT_T_CAM_TO_BASE if camera_to_base is None else camera_to_base
+    )
+    rotation = np.asarray(rotation_camera, dtype=np.float64)
+    translation = np.asarray(translation_camera, dtype=np.float64).reshape(-1)
+    _validate_rotation(rotation)
+    if translation.shape != (3,) or not np.isfinite(translation).all():
+        raise ValueError(f"invalid AnyGrasp translation: shape={translation.shape}")
+    if not math.isfinite(grasp_width_m) or grasp_width_m <= 0:
+        raise ValueError(f"invalid AnyGrasp gripper width: {grasp_width_m}")
 
-    # 3) 下到水杯位置
-    move_with_check(piper, X, Y, Z, RX, RY, RZ)
-    time.sleep(1.0)
-    print("已下到水杯位置")
+    camera_to_object = np.eye(4, dtype=np.float64)
+    camera_to_object[:3, :3] = rotation
+    camera_to_object[:3, 3] = translation
+    base_to_detected = base_from_camera @ camera_to_object
 
-    # 4) 收拢夹爪（抓水杯）
-    grip_range = int(width * 1e6) * 0.5
-    range = 0
-    count = 0
-    while True:
-        count += 1
-        # print(piper.GetArmGripperMsgs())
-        if count == 500:
-            range = 500
-            count = 0
-        elif count == 100:
-            range = 0
-        piper.GripperCtrl(abs(round(grip_range)), 1000, 0x01, 0)
-        g = piper.GetArmGripperMsgs().gripper_state.grippers_angle
-        if g > 80000:
-            break
-        time.sleep(0.005)
-    print("已收拢夹爪")
-    time.sleep(2.0)
+    original_angles = tuple(np.degrees(_euler_zyx(base_to_detected[:3, :3])))
+    # Preserve the deployed tool-mount convention, but normalize after applying the
+    # fixed 85-degree mount offset so an angle such as 146 degrees is never emitted.
+    command_angles = (
+        _normalize_gripper_angle(float(original_angles[0])),
+        _normalize_gripper_angle(float(original_angles[1]) + 85.0),
+        _normalize_gripper_angle(float(original_angles[2])),
+    )
 
-    # 5) 抬起水杯
-    target_Z = Z + int(100e3)
-    move_with_check(piper, X, Y, target_Z, RX, RY, RZ)
-    print("✅ 已成功抓起水杯")
+    tool_axis_mapping = np.eye(4, dtype=np.float64)
+    tool_axis_mapping[:3, :3] = np.array(
+        [[0.0, 0.0, 1.0], [0.0, -1.0, 0.0], [1.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    camera_to_tool = camera_to_object @ tool_axis_mapping
 
-    # move_with_check(piper, 520_000, -460_000, 310_000, 60_000, 90_000, 0)
-    # range=0
-    # count=0
-    # while True:
-    #    count+=1
-    #    #print(piper.GetArmGripperMsgs())
-    #    if count==500:
-    #        range=500
-    #        count=0
-    #    elif count==100:
-    #        range=0
-    #    piper.GripperCtrl(abs(round(100_000)), 1000, 0x01, 0)
-    #    g = piper.GetArmGripperMsgs().gripper_state.grippers_angle
-    #    if g > 80000:
-    #        break
-    #    time.sleep(0.005)
-    # print("已收拢夹爪")
-    # time.sleep(2.0)
-    # piper.JointCtrl(0, 0, 0, 0, 0, 0)
-    # piper.GripperCtrl(abs(0), 1000, 0x01, 0)
+    tool_offset = np.eye(4, dtype=np.float64)
+    tool_offset[:3, 3] = [0.0, 0.0, -config.tool_offset_m]
+    base_to_grasp = base_from_camera @ camera_to_tool @ tool_offset
+
+    pregrasp_offset = np.eye(4, dtype=np.float64)
+    pregrasp_offset[:3, 3] = [0.0, 0.0, -config.pregrasp_clearance_m]
+    base_to_pregrasp = base_to_grasp @ pregrasp_offset
+
+    base_to_lift = base_to_grasp.copy()
+    base_to_lift[2, 3] += config.lift_distance_m
+
+    plan = ArmMotionPlan(
+        detected_object_pose=_pose_from_transform(base_to_detected, original_angles),
+        ready_pose=ArmPose(0.015, 0.0, 0.275, 0.0, 85.0, 0.0),
+        pregrasp_pose=_pose_from_transform(base_to_pregrasp, command_angles),
+        grasp_pose=_pose_from_transform(base_to_grasp, command_angles),
+        lift_pose=_pose_from_transform(base_to_lift, command_angles),
+        gripper_open_width_m=config.gripper_max_width_m,
+        gripper_grasp_width_m=float(grasp_width_m),
+    )
+    validate_motion_plan(plan, config)
+    return plan
 
 
-if __name__ == "__main__":
-    # ==== 创建实验保存目录 ====
-    parser = argparse.ArgumentParser()
+def validate_motion_plan(plan: ArmMotionPlan, safety: ArmSafetyConfig) -> None:
+    if plan.gripper_grasp_width_m > safety.gripper_max_width_m:
+        raise ValueError(
+            "AnyGrasp width exceeds the configured Piper gripper limit: "
+            f"{plan.gripper_grasp_width_m:.4f}m > {safety.gripper_max_width_m:.4f}m"
+        )
+
+    for name, pose in (
+        ("ready", plan.ready_pose),
+        ("pregrasp", plan.pregrasp_pose),
+        ("grasp", plan.grasp_pose),
+        ("lift", plan.lift_pose),
+    ):
+        values = asdict(pose).values()
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError(f"Piper {name} pose contains a non-finite value")
+        radius = math.sqrt(pose.x_m**2 + pose.y_m**2 + pose.z_m**2)
+        if radius > safety.max_reach_m:
+            raise ValueError(
+                f"Piper {name} pose exceeds maximum reach: {radius:.4f}m > "
+                f"{safety.max_reach_m:.4f}m"
+            )
+        if abs(pose.x_m) > safety.max_abs_x_m or abs(pose.y_m) > safety.max_abs_y_m:
+            raise ValueError(f"Piper {name} pose exceeds configured X/Y workspace limits")
+        if not safety.min_z_m <= pose.z_m <= safety.max_z_m:
+            raise ValueError(f"Piper {name} Z is outside the configured range: {pose.z_m:.4f}m")
+        if max(abs(pose.rx_deg), abs(pose.ry_deg), abs(pose.rz_deg)) > 90.0:
+            raise ValueError(f"Piper {name} orientation is outside [-90, 90] degrees")
+
+
+def _angular_error_mdeg(actual: int, target: int) -> int:
+    return abs((actual - target + 180_000) % 360_000 - 180_000)
+
+
+def move_with_check(
+    piper: Any,
+    pose: ArmPose,
+    *,
+    timeout_s: float,
+    position_tolerance_m: float,
+    angle_tolerance_deg: float,
+) -> None:
+    """Send an end-pose target and fail unless all six feedback axes converge."""
+
+    target = pose.command()
+    position_tolerance = _meters_to_micrometers(position_tolerance_m)
+    angle_tolerance = _degrees_to_millidegrees(angle_tolerance_deg)
+    deadline = time.monotonic() + timeout_s
+    last_actual: tuple[int, int, int, int, int, int] | None = None
+
+    while time.monotonic() < deadline:
+        piper.EndPoseCtrl(*target)
+        feedback = piper.GetArmEndPoseMsgs().end_pose
+        last_actual = (
+            int(feedback.X_axis),
+            int(feedback.Y_axis),
+            int(feedback.Z_axis),
+            int(feedback.RX_axis),
+            int(feedback.RY_axis),
+            int(feedback.RZ_axis),
+        )
+        position_ok = all(
+            abs(actual - expected) <= position_tolerance
+            for actual, expected in zip(last_actual[:3], target[:3], strict=True)
+        )
+        angle_ok = all(
+            _angular_error_mdeg(actual, expected) <= angle_tolerance
+            for actual, expected in zip(last_actual[3:], target[3:], strict=True)
+        )
+        if position_ok and angle_ok:
+            return
+        time.sleep(0.02)
+
+    raise TimeoutError(
+        f"Piper failed to reach pose within {timeout_s:.1f}s; "
+        f"target={target}, last_feedback={last_actual}"
+    )
+
+
+def _enable_with_timeout(piper: Any, timeout_s: float) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if piper.EnablePiper():
+            return
+        time.sleep(0.05)
+    raise TimeoutError(f"Piper could not be enabled within {timeout_s:.1f}s")
+
+
+def _set_gripper_with_check(
+    piper: Any,
+    width_m: float,
+    *,
+    timeout_s: float,
+    tolerance_m: float,
+) -> None:
+    target = _meters_to_micrometers(width_m)
+    tolerance = _meters_to_micrometers(tolerance_m)
+    deadline = time.monotonic() + timeout_s
+    last_actual: int | None = None
+
+    while time.monotonic() < deadline:
+        piper.GripperCtrl(target, 1000, 0x01, 0)
+        last_actual = int(piper.GetArmGripperMsgs().gripper_state.grippers_angle)
+        if abs(last_actual - target) <= tolerance:
+            return
+        time.sleep(0.02)
+
+    raise TimeoutError(
+        f"Piper gripper failed to reach {width_m:.4f}m within {timeout_s:.1f}s; "
+        f"last_feedback={last_actual}"
+    )
+
+
+def _print_plan(plan: ArmMotionPlan) -> None:
+    print("Piper detected object pose:", asdict(plan.detected_object_pose))
+    print("Piper ready pose:", asdict(plan.ready_pose))
+    print("Piper pregrasp pose:", asdict(plan.pregrasp_pose))
+    print("Piper grasp pose:", asdict(plan.grasp_pose))
+    print("Piper lift pose:", asdict(plan.lift_pose))
+    print(
+        "Piper gripper widths (open/grasp m):",
+        plan.gripper_open_width_m,
+        plan.gripper_grasp_width_m,
+    )
+
+
+def _execute_motion_plan(plan: ArmMotionPlan, safety: ArmSafetyConfig) -> None:
+    try:
+        from piper_sdk import C_PiperInterface_V2
+    except ImportError as exc:
+        raise ImportError("Piper execution requires piper_sdk") from exc
+
+    piper: Any | None = None
+    hardware_action_started = False
+    try:
+        piper = C_PiperInterface_V2(safety.can_name)
+        piper.ConnectPort()
+        _enable_with_timeout(piper, safety.enable_timeout_s)
+        hardware_action_started = True
+
+        piper.GripperCtrl(0, 1000, 0x02, 0)
+        piper.GripperCtrl(0, 1000, 0x03, 0)
+        _set_gripper_with_check(
+            piper,
+            plan.gripper_open_width_m,
+            timeout_s=safety.gripper_timeout_s,
+            tolerance_m=safety.gripper_tolerance_m,
+        )
+
+        piper.MotionCtrl_2(0x01, 0x00, safety.motion_speed_percent, 0x00)
+        for name, pose in (
+            ("ready", plan.ready_pose),
+            ("pregrasp", plan.pregrasp_pose),
+            ("grasp", plan.grasp_pose),
+        ):
+            move_with_check(
+                piper,
+                pose,
+                timeout_s=safety.move_timeout_s,
+                position_tolerance_m=safety.position_tolerance_m,
+                angle_tolerance_deg=safety.angle_tolerance_deg,
+            )
+            print(f"Piper reached {name} pose")
+
+        _set_gripper_with_check(
+            piper,
+            plan.gripper_grasp_width_m,
+            timeout_s=safety.gripper_timeout_s,
+            tolerance_m=safety.gripper_tolerance_m,
+        )
+        print("Piper gripper reached grasp width")
+
+        move_with_check(
+            piper,
+            plan.lift_pose,
+            timeout_s=safety.move_timeout_s,
+            position_tolerance_m=safety.position_tolerance_m,
+            angle_tolerance_deg=safety.angle_tolerance_deg,
+        )
+        print("Piper reached lift pose")
+    except Exception as exc:
+        emergency_requested = False
+        if piper is not None and hardware_action_started:
+            with suppress(Exception):
+                piper.EmergencyStop(0x01)
+                emergency_requested = True
+        suffix = "emergency stop requested" if emergency_requested else "no motion command sent"
+        raise RuntimeError(f"Piper execution failed ({suffix}): {exc}") from exc
+    finally:
+        if piper is not None:
+            with suppress(Exception):
+                piper.DisconnectPort()
+
+
+def run_pipeline(
+    rotation_camera: np.ndarray,
+    translation_camera: np.ndarray,
+    grasp_width_m: float,
+    *,
+    execute: bool = False,
+    device_config_path: str | Path = DEFAULT_DEVICE_CONFIG_PATH,
+    arm_side: str | None = None,
+    can_name: str | None = None,
+    motion_speed_percent: int | None = None,
+    gripper_max_width_m: float | None = None,
+    tool_offset_m: float | None = None,
+    pregrasp_clearance_m: float | None = None,
+    lift_distance_m: float | None = None,
+    max_reach_m: float | None = None,
+    min_z_m: float | None = None,
+    max_z_m: float | None = None,
+) -> dict[str, Any]:
+    """Plan a Piper grasp and execute it only when ``execute`` is explicitly true."""
+
+    camera_to_base, safety, device = load_device_config(
+        device_config_path,
+        arm_side=arm_side,
+        can_name=can_name,
+        motion_speed_percent=motion_speed_percent,
+        gripper_max_width_m=gripper_max_width_m,
+        tool_offset_m=tool_offset_m,
+        pregrasp_clearance_m=pregrasp_clearance_m,
+        lift_distance_m=lift_distance_m,
+        max_reach_m=max_reach_m,
+        min_z_m=min_z_m,
+        max_z_m=max_z_m,
+    )
+    plan = build_motion_plan(
+        rotation_camera,
+        translation_camera,
+        grasp_width_m,
+        safety=safety,
+        camera_to_base=camera_to_base,
+    )
+    _print_plan(plan)
+    if execute:
+        _execute_motion_plan(plan, safety)
+    else:
+        print("Piper dry-run complete; no CAN interface was opened")
+    return {
+        "executed": bool(execute),
+        "plan": plan.as_dict(),
+        "safety": asdict(safety),
+        "device": device,
+    }
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Capture an RGB-D frame, plan a Piper grasp, and execute only with confirmation",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument(
         "--checkpoint_path",
         default="ckpts/checkpoint_detection.tar",
         help="AnyGrasp 2026 detection checkpoint path",
     )
-    parser.add_argument(
-        "--max_gripper_width", type=float, default=0.1, help="Maximum gripper width (<=0.1m)"
-    )
-    parser.add_argument("--gripper_height", type=float, default=0.03, help="Gripper height")
-    parser.add_argument(
-        "--top_down_grasp", default=True, action="store_true", help="Output top-down grasps."
-    )
-    parser.add_argument("--debug", default=True, action="store_true", help="Enable debug mode")
-    parser.add_argument(
-        "--save_dir", default="debug/funny", help="Directory to save captured frame"
-    )
+    parser.add_argument("--max_gripper_width", type=float, default=0.1)
+    parser.add_argument("--gripper_height", type=float, default=0.03)
+    parser.add_argument("--top_down_grasp", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--save_dir", default="debug/funny")
     parser.add_argument(
         "--camera_backend",
         choices=["orbbec", "realsense", "auto"],
         default="orbbec",
     )
-    cfgs = parser.parse_args()
-    cfgs.max_gripper_width = max(0, min(0.1, cfgs.max_gripper_width))
-    capture = capture_one_frame(cfgs.save_dir, backend=cfgs.camera_backend)
-    cfgs.depth_scale = capture.raw_units_per_meter
-    cfgs.camera_intrinsics = {
+    parser.add_argument("--execute-arm", action="store_true")
+    parser.add_argument("--confirm-arm-motion", action="store_true")
+    parser.add_argument("--arm-config", default=DEFAULT_DEVICE_CONFIG_PATH)
+    parser.add_argument("--arm-side", choices=["left", "right"])
+    parser.add_argument("--arm-can-interface")
+    parser.add_argument("--arm-speed-percent", type=int)
+    parser.add_argument("--arm-gripper-max-width", type=float)
+    return parser
+
+
+def main() -> int:
+    args = _build_parser().parse_args()
+    if args.execute_arm and not args.confirm_arm_motion:
+        raise SystemExit("--execute-arm requires --confirm-arm-motion")
+
+    from camera_capture import capture_one_frame
+    from get_pose import run_anygrasp
+
+    args.max_gripper_width = max(0.0, min(0.1, args.max_gripper_width))
+    capture = capture_one_frame(args.save_dir, backend=args.camera_backend)
+    args.depth_scale = capture.raw_units_per_meter
+    args.camera_intrinsics = {
         "fx": capture.intrinsics.fx,
         "fy": capture.intrinsics.fy,
         "cx": capture.intrinsics.cx,
         "cy": capture.intrinsics.cy,
     }
-    save_dir = str(capture.run_dir)
-    R_cam, t_cam, width = run_anygrasp(save_dir, cfgs, data_dir=save_dir)
-    run_pipeline(R_cam, t_cam, width)
+    run_dir = str(capture.run_dir)
+    grasp = run_anygrasp(run_dir, args, data_dir=run_dir)
+    if grasp is None:
+        raise RuntimeError("AnyGrasp did not return a valid grasp")
+    run_pipeline(
+        grasp[0],
+        grasp[1],
+        grasp[2],
+        execute=args.execute_arm,
+        device_config_path=args.arm_config,
+        arm_side=args.arm_side,
+        can_name=args.arm_can_interface,
+        motion_speed_percent=args.arm_speed_percent,
+        gripper_max_width_m=args.arm_gripper_max_width,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

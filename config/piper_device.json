@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0.0",
+  "device_name": "agilex-dual-piper",
+  "active_arm": "left",
+  "arms": {
+    "left": {
+      "enabled": true,
+      "can_interface": "can2",
+      "camera_to_base": [
+        [-0.03188415, -0.64642446, 0.7623115, -0.02826907],
+        [-0.99742629, -0.02842686, -0.06582336, -0.2205848],
+        [0.06421995, -0.76244825, -0.64385438, 0.57842954],
+        [0.0, 0.0, 0.0, 1.0]
+      ]
+    },
+    "right": {
+      "enabled": false,
+      "can_interface": "can1",
+      "camera_to_base": null,
+      "disabled_reason": "Right-arm camera-to-base calibration has not been provided"
+    }
+  },
+  "motion": {
+    "motion_speed_percent": 10,
+    "gripper_max_width_m": 0.07,
+    "tool_offset_m": 0.07,
+    "pregrasp_clearance_m": 0.15,
+    "lift_distance_m": 0.1,
+    "max_reach_m": 0.62,
+    "min_z_m": 0.05,
+    "max_z_m": 0.6,
+    "max_abs_x_m": 0.5,
+    "max_abs_y_m": 0.5,
+    "enable_timeout_s": 5.0,
+    "move_timeout_s": 12.0,
+    "gripper_timeout_s": 8.0,
+    "position_tolerance_m": 0.005,
+    "angle_tolerance_deg": 5.0,
+    "gripper_tolerance_m": 0.003
+  }
+}

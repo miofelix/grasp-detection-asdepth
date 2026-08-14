@@ -91,8 +91,65 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--execute-arm",
         action="store_true",
-        help="显式允许调用现有 Piper 控制逻辑；默认只运行感知链路",
+        help="真实连接 Piper 并执行运动；还必须同时传 --confirm-arm-motion",
     )
+    parser.add_argument(
+        "--arm-dry-run",
+        action="store_true",
+        help="只生成并校验 Piper 运动计划，不连接 CAN 或发送运动命令",
+    )
+    parser.add_argument(
+        "--confirm-arm-motion",
+        action="store_true",
+        help="第二重确认真实机械臂运动；只在与 --execute-arm 同时使用时有效",
+    )
+    parser.add_argument(
+        "--arm-config",
+        default="config/piper_device.json",
+        help="Piper 双臂、CAN、手眼标定和安全参数 JSON",
+    )
+    parser.add_argument(
+        "--arm-side",
+        choices=["left", "right"],
+        default=None,
+        help="选择机械臂；默认使用配置文件中的 active_arm",
+    )
+    parser.add_argument(
+        "--arm-can-interface",
+        default=None,
+        help="临时覆盖配置文件中的 SocketCAN 接口",
+    )
+    parser.add_argument(
+        "--arm-speed-percent",
+        type=int,
+        default=None,
+        help="临时覆盖 Piper 运动速度百分比",
+    )
+    parser.add_argument(
+        "--arm-gripper-max-width",
+        type=float,
+        default=None,
+        help="临时覆盖现场 Piper 夹爪最大行程，单位米",
+    )
+    parser.add_argument(
+        "--arm-min-grasp-score",
+        type=float,
+        default=0.2,
+        help="允许机械臂真实执行的最低 AnyGrasp 分数",
+    )
+    parser.add_argument("--arm-tool-offset", type=float, default=None, help="临时覆盖工具偏移")
+    parser.add_argument(
+        "--arm-pregrasp-clearance",
+        type=float,
+        default=None,
+        help="临时覆盖预抓取点沿工具轴后退距离",
+    )
+    parser.add_argument(
+        "--arm-lift-distance", type=float, default=None, help="临时覆盖抓取后抬升距离"
+    )
+    parser.add_argument("--arm-max-reach", type=float, default=None, help="临时覆盖最大可达距离")
+    parser.add_argument("--arm-min-z", type=float, default=None, help="临时覆盖目标最低基座 Z")
+    parser.add_argument("--arm-max-z", type=float, default=None, help="临时覆盖目标最高基座 Z")
     parser.add_argument(
         "--trusted-depth-checkpoint",
         action="store_true",
@@ -125,6 +182,37 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--max-gripper-width must be between 0 and 0.1 meter")
     if args.gripper_height <= 0:
         parser.error("--gripper-height must be positive")
+    if args.execute_arm and args.arm_dry_run:
+        parser.error("--execute-arm and --arm-dry-run are mutually exclusive")
+    if args.execute_arm and not args.confirm_arm_motion:
+        parser.error("--execute-arm requires --confirm-arm-motion")
+    if args.confirm_arm_motion and not args.execute_arm:
+        parser.error("--confirm-arm-motion is only valid with --execute-arm")
+    if args.arm_can_interface == "":
+        parser.error("--arm-can-interface must not be empty")
+    if args.arm_speed_percent is not None and not 1 <= args.arm_speed_percent <= 100:
+        parser.error("--arm-speed-percent must be between 1 and 100")
+    if args.arm_gripper_max_width is not None and not 0 < args.arm_gripper_max_width <= 0.1:
+        parser.error("--arm-gripper-max-width must be in (0, 0.1] meter")
+    if not 0 <= args.arm_min_grasp_score <= 1:
+        parser.error("--arm-min-grasp-score must be between 0 and 1")
+    distances = (
+        args.arm_tool_offset,
+        args.arm_pregrasp_clearance,
+        args.arm_lift_distance,
+    )
+    if any(value is not None and value <= 0 for value in distances):
+        parser.error("arm tool offset, pregrasp clearance and lift distance must be positive")
+    if args.arm_max_reach is not None and args.arm_max_reach <= 0:
+        parser.error("--arm-max-reach must be positive")
+    if args.arm_min_z is not None and args.arm_min_z < 0:
+        parser.error("--arm-min-z must be non-negative")
+    if (
+        args.arm_min_z is not None
+        and args.arm_max_z is not None
+        and args.arm_min_z >= args.arm_max_z
+    ):
+        parser.error("Piper arm Z range is invalid")
 
 
 def _resolve_file(path: str | Path, *, label: str) -> Path:
@@ -189,10 +277,26 @@ def _capture_camera(args: argparse.Namespace) -> CaptureResult:
     )
 
 
-def _load_arm_runner() -> Callable[[np.ndarray, np.ndarray, float], Any]:
+def _load_arm_runner() -> Callable[..., Any]:
     from grasp_piper import run_pipeline
 
     return run_pipeline
+
+
+def _arm_runner_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "device_config_path": args.arm_config,
+        "arm_side": args.arm_side,
+        "can_name": args.arm_can_interface,
+        "motion_speed_percent": args.arm_speed_percent,
+        "gripper_max_width_m": args.arm_gripper_max_width,
+        "tool_offset_m": args.arm_tool_offset,
+        "pregrasp_clearance_m": args.arm_pregrasp_clearance,
+        "lift_distance_m": args.arm_lift_distance,
+        "max_reach_m": args.arm_max_reach,
+        "min_z_m": args.arm_min_z,
+        "max_z_m": args.arm_max_z,
+    }
 
 
 def _clear_model_cache() -> None:
@@ -337,9 +441,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     np.save(prediction_path, pred_depth)
 
     grasp_started = time.perf_counter()
+    grasp_config = _grasp_config(args, grasp_checkpoint, intrinsics)
     grasp = run_anygrasp(
         str(run_dir),
-        _grasp_config(args, grasp_checkpoint, intrinsics),
+        grasp_config,
         rgb=color_bgr,
         depth=pred_depth,
     )
@@ -349,6 +454,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     rotation = np.asarray(grasp[0], dtype=np.float64)
     translation = np.asarray(grasp[1], dtype=np.float64).reshape(-1)
     width = float(grasp[2])
+    grasp_score_value = getattr(grasp_config, "grasp_score", None)
+    grasp_score = float(grasp_score_value) if grasp_score_value is not None else None
+    grasp_candidate_count = int(getattr(grasp_config, "grasp_count", 0))
     if rotation.shape != (3, 3) or translation.shape != (3,):
         raise ValueError(
             f"invalid AnyGrasp pose shapes: rotation={rotation.shape}, translation={translation.shape}"
@@ -365,6 +473,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "depth_checkpoint_tensor_count": checkpoint_report.tensor_count,
         "depth_checkpoint_stripped_prefixes": list(checkpoint_report.stripped_prefixes),
         "grasp_checkpoint": str(grasp_checkpoint),
+        "grasp_score": grasp_score,
+        "grasp_candidate_count": grasp_candidate_count,
+        "grasp_width_m": width,
         "rgb_image": str(rgb_path.resolve()),
         "raw_depth_image": str(depth_path.resolve()),
         "prediction": str(prediction_path.resolve()),
@@ -391,7 +502,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "input_size": int(args.input_size),
         "resize_method": args.resize_method,
         "execute_arm_requested": bool(args.execute_arm),
+        "arm_dry_run_requested": bool(args.arm_dry_run),
+        "arm_min_grasp_score": float(args.arm_min_grasp_score),
+        "arm_score_gate_passed": (
+            grasp_score is not None and grasp_score >= args.arm_min_grasp_score
+        ),
         "arm_executed": False,
+        "arm_execution_state": "not_requested",
+        "arm_may_have_moved": False,
         "timings_ms": {
             "depth_model_load": load_ms,
             "depth_inference": depth_ms,
@@ -401,12 +519,76 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     metadata_path = run_dir / "run_metadata.json"
     _write_metadata(metadata_path, metadata)
 
-    if args.execute_arm:
-        arm_started = time.perf_counter()
-        _load_arm_runner()(rotation, translation, width)
-        metadata["arm_executed"] = True
-        metadata["timings_ms"]["arm"] = (time.perf_counter() - arm_started) * 1000.0
-        _write_metadata(metadata_path, metadata)
+    arm_requested = bool(args.execute_arm or args.arm_dry_run)
+    if arm_requested:
+        if args.execute_arm and grasp_score is None:
+            metadata["arm_execution_state"] = "rejected"
+            metadata["arm_error"] = "AnyGrasp did not expose a score for safety validation"
+            _write_metadata(metadata_path, metadata)
+            raise RuntimeError(metadata["arm_error"])
+        if args.execute_arm and grasp_score < args.arm_min_grasp_score:
+            metadata["arm_execution_state"] = "rejected"
+            metadata["arm_error"] = (
+                f"AnyGrasp score {grasp_score:.6f} is below the arm threshold "
+                f"{args.arm_min_grasp_score:.6f}"
+            )
+            _write_metadata(metadata_path, metadata)
+            raise RuntimeError(metadata["arm_error"])
+
+        arm_runner = _load_arm_runner()
+        runner_kwargs = _arm_runner_kwargs(args)
+        planning_started = time.perf_counter()
+        try:
+            preview = arm_runner(
+                rotation,
+                translation,
+                width,
+                execute=False,
+                **runner_kwargs,
+            )
+        except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            metadata["arm_execution_state"] = "rejected"
+            metadata["arm_error"] = str(exc)
+            metadata["timings_ms"]["arm_planning"] = (
+                time.perf_counter() - planning_started
+            ) * 1000.0
+            _write_metadata(metadata_path, metadata)
+            raise
+
+        metadata["arm_plan"] = preview["plan"]
+        metadata["arm_safety_config"] = preview["safety"]
+        if preview.get("device") is not None:
+            metadata["arm_device"] = preview["device"]
+        metadata["timings_ms"]["arm_planning"] = (time.perf_counter() - planning_started) * 1000.0
+        if args.arm_dry_run:
+            metadata["arm_execution_state"] = "dry_run_complete"
+            _write_metadata(metadata_path, metadata)
+        else:
+            metadata["arm_execution_state"] = "starting"
+            _write_metadata(metadata_path, metadata)
+            arm_started = time.perf_counter()
+            try:
+                execution = arm_runner(
+                    rotation,
+                    translation,
+                    width,
+                    execute=True,
+                    **runner_kwargs,
+                )
+            except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                metadata["arm_execution_state"] = "failed"
+                metadata["arm_may_have_moved"] = True
+                metadata["arm_error"] = str(exc)
+                metadata["timings_ms"]["arm_execution"] = (
+                    time.perf_counter() - arm_started
+                ) * 1000.0
+                _write_metadata(metadata_path, metadata)
+                raise
+            metadata["arm_executed"] = bool(execution["executed"])
+            metadata["arm_execution_state"] = "complete"
+            metadata["arm_may_have_moved"] = bool(execution["executed"])
+            metadata["timings_ms"]["arm_execution"] = (time.perf_counter() - arm_started) * 1000.0
+            _write_metadata(metadata_path, metadata)
 
     return {
         "run_dir": str(run_dir),
@@ -414,6 +596,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "grasp_pose": str(pose_path),
         "metadata": str(metadata_path),
         "arm_executed": metadata["arm_executed"],
+        "arm_execution_state": metadata["arm_execution_state"],
     }
 
 

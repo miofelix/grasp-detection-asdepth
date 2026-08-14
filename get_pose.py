@@ -81,6 +81,8 @@ def run_anygrasp(save_dir, cfgs, data_dir=None, rgb=None, depth=None):
         return
 
     gg_pick = gg[0:20]
+    cfgs.grasp_score = float(gg_pick[0].score)
+    cfgs.grasp_count = len(gg_pick)
 
     print("Top grasp scores:", gg_pick.scores)
     print("得分最高的物体位姿：", gg[0])
