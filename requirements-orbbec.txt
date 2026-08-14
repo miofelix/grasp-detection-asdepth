@@ -1,0 +1,4 @@
+# Orbbec DaBai DC1 需要 legacy PyOrbbecSDK v1（官方仓库 main 分支）。
+# 该 SDK 包含原生库，不能可靠地作为普通 PyPI 依赖安装；请按 README 的源码构建步骤安装，
+# 并确保构建产物 install/lib 位于当前环境的 PYTHONPATH 中。
+# 官方仓库：https://github.com/orbbec/pyorbbecsdk/tree/main

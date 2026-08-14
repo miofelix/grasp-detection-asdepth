@@ -1,4 +1,4 @@
-"""RealSense RGB-D → 深度模型 → AnyGrasp → 可选 Piper 的安全入口。"""
+"""Orbbec/RealSense RGB-D → 深度模型 → AnyGrasp → 可选 Piper 的安全入口。"""
 
 from __future__ import annotations
 
@@ -14,6 +14,17 @@ from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
+
+from camera_capture import CameraIntrinsics, CaptureResult
+
+LEGACY_CAMERA_INTRINSICS = CameraIntrinsics(
+    fx=616.22601724,
+    fy=615.78839082,
+    cx=315.33494299,
+    cy=251.59150012,
+    width=640,
+    height=480,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,7 +48,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--depth-image", help="离线 raw depth 图像；必须与 --rgb-image 同时提供")
     parser.add_argument("--save-dir", default="debug/asdepth", help="运行产物根目录")
     parser.add_argument("--device", default="auto", help="深度模型推理设备，例如 cuda、cuda:0、cpu")
-    parser.add_argument("--depth-scale", type=float, default=1000.0)
+    parser.add_argument(
+        "--camera-backend",
+        choices=["orbbec", "realsense", "auto"],
+        default="orbbec",
+        help="在线采集后端；离线图片模式下忽略",
+    )
+    parser.add_argument("--camera-width", type=int, default=640, help="RealSense 彩色/深度宽度")
+    parser.add_argument("--camera-height", type=int, default=480, help="RealSense 彩色/深度高度")
+    parser.add_argument("--camera-fps", type=int, default=30, help="RealSense 彩色/深度帧率")
+    parser.add_argument("--camera-warmup-frames", type=int, default=30)
+    parser.add_argument("--camera-timeout", type=float, default=20.0, help="在线采集超时，单位秒")
+    parser.add_argument(
+        "--depth-scale",
+        type=float,
+        default=None,
+        help="每米对应的 raw depth 单位数；在线模式默认读取相机，离线默认 1000",
+    )
+    parser.add_argument("--camera-fx", type=float, help="覆盖彩色相机内参 fx")
+    parser.add_argument("--camera-fy", type=float, help="覆盖彩色相机内参 fy")
+    parser.add_argument("--camera-cx", type=float, help="覆盖彩色相机内参 cx")
+    parser.add_argument("--camera-cy", type=float, help="覆盖彩色相机内参 cy")
     parser.add_argument(
         "--max-depth", type=float, default=10.0, help="raw depth 有效上限，单位 meter"
     )
@@ -71,8 +102,23 @@ def build_parser() -> argparse.ArgumentParser:
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if bool(args.rgb_image) != bool(args.depth_image):
         parser.error("--rgb-image and --depth-image must be provided together")
-    if args.depth_scale <= 0 or args.max_depth <= 0 or args.input_size <= 0:
-        parser.error("--depth-scale, --max-depth and --input-size must be positive")
+    if args.depth_scale is not None and args.depth_scale <= 0:
+        parser.error("--depth-scale must be positive")
+    if args.max_depth <= 0 or args.input_size <= 0:
+        parser.error("--max-depth and --input-size must be positive")
+    if args.camera_width <= 0 or args.camera_height <= 0 or args.camera_fps <= 0:
+        parser.error("--camera-width, --camera-height and --camera-fps must be positive")
+    if args.camera_warmup_frames < 0 or args.camera_timeout <= 0:
+        parser.error("--camera-warmup-frames must be non-negative and --camera-timeout positive")
+    intrinsic_values = [args.camera_fx, args.camera_fy, args.camera_cx, args.camera_cy]
+    if any(value is not None for value in intrinsic_values) and not all(
+        value is not None for value in intrinsic_values
+    ):
+        parser.error(
+            "--camera-fx, --camera-fy, --camera-cx and --camera-cy must be provided together"
+        )
+    if args.camera_fx is not None and (args.camera_fx <= 0 or args.camera_fy <= 0):
+        parser.error("--camera-fx and --camera-fy must be positive")
     if not 0.0 <= args.max_gripper_width <= 0.1:
         parser.error("--max-gripper-width must be between 0 and 0.1 meter")
     if args.gripper_height <= 0:
@@ -117,14 +163,28 @@ def _load_rgbd_files(
     )
 
 
-def _load_anygrasp_functions() -> tuple[Callable[[str], str], Callable[..., Any]]:
+def _load_anygrasp_function() -> Callable[..., Any]:
     from anygrasp_runtime import load_gsnet_module, validate_license_dir
 
     validate_license_dir()
     load_gsnet_module()
-    from get_pose import capture_one_frame, run_anygrasp
+    from get_pose import run_anygrasp
 
-    return capture_one_frame, run_anygrasp
+    return run_anygrasp
+
+
+def _capture_camera(args: argparse.Namespace) -> CaptureResult:
+    from camera_capture import capture_one_frame
+
+    return capture_one_frame(
+        args.save_dir,
+        backend=args.camera_backend,
+        width=args.camera_width,
+        height=args.camera_height,
+        fps=args.camera_fps,
+        warmup_frames=args.camera_warmup_frames,
+        timeout_s=args.camera_timeout,
+    )
 
 
 def _load_arm_runner() -> Callable[[np.ndarray, np.ndarray, float], Any]:
@@ -163,7 +223,11 @@ def _write_metadata(path: Path, metadata: dict[str, Any]) -> None:
         json.dump(metadata, stream, ensure_ascii=False, indent=2, sort_keys=True)
 
 
-def _grasp_config(args: argparse.Namespace, checkpoint: Path) -> SimpleNamespace:
+def _grasp_config(
+    args: argparse.Namespace,
+    checkpoint: Path,
+    intrinsics: CameraIntrinsics,
+) -> SimpleNamespace:
     return SimpleNamespace(
         checkpoint_path=str(checkpoint),
         max_gripper_width=float(args.max_gripper_width),
@@ -171,23 +235,74 @@ def _grasp_config(args: argparse.Namespace, checkpoint: Path) -> SimpleNamespace
         top_down_grasp=bool(args.top_down_grasp),
         debug=bool(args.debug),
         save_dir=str(args.save_dir),
+        camera_intrinsics={
+            "fx": intrinsics.fx,
+            "fy": intrinsics.fy,
+            "cx": intrinsics.cx,
+            "cy": intrinsics.cy,
+        },
+    )
+
+
+def _resolve_intrinsics(
+    args: argparse.Namespace,
+    *,
+    capture: CaptureResult | None,
+    image_shape: tuple[int, int],
+) -> CameraIntrinsics:
+    height, width = image_shape
+    if args.camera_fx is not None:
+        return CameraIntrinsics(
+            fx=float(args.camera_fx),
+            fy=float(args.camera_fy),
+            cx=float(args.camera_cx),
+            cy=float(args.camera_cy),
+            width=width,
+            height=height,
+        )
+    if capture is not None:
+        return capture.intrinsics
+    if (height, width) == (LEGACY_CAMERA_INTRINSICS.height, LEGACY_CAMERA_INTRINSICS.width):
+        return LEGACY_CAMERA_INTRINSICS
+    scale_x = width / LEGACY_CAMERA_INTRINSICS.width
+    scale_y = height / LEGACY_CAMERA_INTRINSICS.height
+    return CameraIntrinsics(
+        fx=LEGACY_CAMERA_INTRINSICS.fx * scale_x,
+        fy=LEGACY_CAMERA_INTRINSICS.fy * scale_y,
+        cx=LEGACY_CAMERA_INTRINSICS.cx * scale_x,
+        cy=LEGACY_CAMERA_INTRINSICS.cy * scale_y,
+        width=width,
+        height=height,
     )
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     depth_checkpoint = _resolve_file(args.depth_checkpoint, label="depth model checkpoint")
     grasp_checkpoint = _resolve_file(args.grasp_checkpoint, label="AnyGrasp checkpoint")
-    capture_one_frame, run_anygrasp = _load_anygrasp_functions()
 
+    capture: CaptureResult | None = None
     if args.rgb_image:
         rgb_path = _resolve_file(args.rgb_image, label="RGB image")
         depth_path = _resolve_file(args.depth_image, label="raw depth image")
         run_dir = _new_file_run_dir(args.save_dir)
     else:
-        run_dir = Path(capture_one_frame(args.save_dir)).expanduser().resolve()
-        rgb_path = run_dir / "color.png"
-        depth_path = run_dir / "depth.png"
+        capture = _capture_camera(args)
+        run_dir = capture.run_dir
+        rgb_path = capture.color_path
+        depth_path = capture.depth_path
     color_bgr, raw_depth = _load_rgbd_files(rgb_path, depth_path)
+    if args.depth_scale is not None:
+        resolved_depth_scale = float(args.depth_scale)
+    elif capture is not None:
+        resolved_depth_scale = float(capture.raw_units_per_meter)
+    else:
+        resolved_depth_scale = 1000.0
+    intrinsics = _resolve_intrinsics(
+        args,
+        capture=capture,
+        image_shape=color_bgr.shape[:2],
+    )
+    run_anygrasp = _load_anygrasp_function()
 
     from asdepth_depth import load_depth_model, predict_depth
 
@@ -204,7 +319,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         loaded,
         color_bgr,
         raw_depth,
-        depth_scale=args.depth_scale,
+        depth_scale=resolved_depth_scale,
         max_depth_m=args.max_depth,
         input_size=args.input_size,
         resize_method=args.resize_method,
@@ -222,7 +337,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     grasp_started = time.perf_counter()
     grasp = run_anygrasp(
         str(run_dir),
-        _grasp_config(args, grasp_checkpoint),
+        _grasp_config(args, grasp_checkpoint, intrinsics),
         rgb=color_bgr,
         depth=pred_depth,
     )
@@ -257,7 +372,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "prediction_dtype": str(pred_depth.dtype),
         "prediction_unit": "meter",
         "device": resolved_device,
-        "depth_scale": float(args.depth_scale),
+        "depth_scale": resolved_depth_scale,
+        "camera_backend": capture.backend if capture is not None else "offline",
+        "camera_name": capture.camera_name if capture is not None else None,
+        "camera_serial_number": capture.serial_number if capture is not None else None,
+        "camera_metadata": str(capture.metadata_path) if capture is not None else None,
+        "camera_intrinsics": {
+            "fx": intrinsics.fx,
+            "fy": intrinsics.fy,
+            "cx": intrinsics.cx,
+            "cy": intrinsics.cy,
+            "width": intrinsics.width,
+            "height": intrinsics.height,
+        },
         "max_depth_m": float(args.max_depth),
         "input_size": int(args.input_size),
         "resize_method": args.resize_method,

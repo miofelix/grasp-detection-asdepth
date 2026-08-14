@@ -9,7 +9,8 @@ import numpy as np
 import open3d as o3d
 from piper_sdk import C_PiperInterface_V2
 
-from get_pose import capture_one_frame, run_anygrasp
+from camera_capture import capture_one_frame
+from get_pose import run_anygrasp
 
 
 def to_um(m):  # 米 → 微米（mm*1e3 == um）
@@ -305,8 +306,21 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_dir", default="debug/funny", help="Directory to save captured frame"
     )
+    parser.add_argument(
+        "--camera_backend",
+        choices=["orbbec", "realsense", "auto"],
+        default="orbbec",
+    )
     cfgs = parser.parse_args()
     cfgs.max_gripper_width = max(0, min(0.1, cfgs.max_gripper_width))
-    save_dir = capture_one_frame(cfgs.save_dir)
+    capture = capture_one_frame(cfgs.save_dir, backend=cfgs.camera_backend)
+    cfgs.depth_scale = capture.raw_units_per_meter
+    cfgs.camera_intrinsics = {
+        "fx": capture.intrinsics.fx,
+        "fy": capture.intrinsics.fy,
+        "cx": capture.intrinsics.cx,
+        "cy": capture.intrinsics.cy,
+    }
+    save_dir = str(capture.run_dir)
     R_cam, t_cam, width = run_anygrasp(save_dir, cfgs, data_dir=save_dir)
     run_pipeline(R_cam, t_cam, width)

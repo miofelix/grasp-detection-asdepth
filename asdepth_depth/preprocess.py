@@ -1,4 +1,4 @@
-"""RealSense BGR/raw depth 到四通道深度模型输入的预处理。"""
+"""RGB-D 相机 BGR/raw depth 到四通道深度模型输入的预处理。"""
 
 from __future__ import annotations
 

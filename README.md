@@ -3,7 +3,7 @@
 本项目把 RGB-D 图像依次交给所选深度模型和 AnyGrasp，生成可供机械臂使用的抓取位姿：
 
 ```text
-离线 RGB-D 图像或 Intel RealSense
+离线 RGB-D 图像、Orbbec DaBai DC1 或 Intel RealSense D435
   → 所选深度模型完成深度预测
   → AnyGrasp 2026 抓取检测
   → 抓取位姿文件
@@ -21,14 +21,15 @@
 | --- | --- | --- | --- |
 | 只验证深度模型 | `asdepth_depth_only.py` | macOS 或 Linux | 深度模型 checkpoint、RGB-D 图像 |
 | 用离线图像检测抓取 | `asdepth_pipeline.py` | Linux x86-64 | 两个 checkpoint、AnyGrasp 许可证、完整运行环境 |
-| 用 RealSense 在线检测 | `asdepth_pipeline.py` | Linux x86-64 | 上述内容和 Intel RealSense |
+| 用 Orbbec 在线检测（默认） | `asdepth_pipeline.py` | Linux x86-64 | 上述内容、DaBai DC1 和 PyOrbbecSDK v1 |
+| 用 RealSense 在线检测 | `asdepth_pipeline.py --camera-backend realsense` | Linux x86-64 | 上述内容、D435 和 `pyrealsense2` |
 | 控制 Piper 抓取 | `asdepth_pipeline.py --execute-arm` | 现场 Linux 主机 | 上述内容、Piper、CAN、手眼标定和安全确认 |
 
 推荐第一次使用时严格按照下面的顺序操作：
 
 1. 先用示例图片完成“仅深度预测”；
 2. 再在 Linux 上完成“离线抓取检测”；
-3. 然后连接 RealSense 完成在线检测；
+3. 然后连接 Orbbec 或 RealSense 完成在线检测；
 4. 最后在完成标定、限位和现场安全检查后启用机械臂。
 
 ## 1. 环境要求
@@ -38,7 +39,7 @@
 - macOS 或 Linux；
 - 推荐 Python 3.10；
 - CPU、Apple MPS 或 NVIDIA CUDA 均可尝试；
-- 不需要 AnyGrasp、RealSense、许可证或 Piper。
+- 不需要 AnyGrasp、相机 SDK、许可证或 Piper。
 
 ### 完整抓取链路
 
@@ -47,7 +48,8 @@
 - NVIDIA CUDA 和与之匹配的 PyTorch；
 - MinkowskiEngine 以及 AnyGrasp 所需的系统依赖；
 - 新版 AnyGrasp 许可证；
-- 连接相机时需要 `pyrealsense2`；
+- 连接 DaBai DC1 时需要 Orbbec SDK v1 的 `pyorbbecsdk`；
+- 连接 D435 时需要 `pyrealsense2`；
 - 控制机械臂时还需要 Piper SDK、CAN 接口和正确的手眼标定。
 
 仓库中的 AnyGrasp GSNet 二进制覆盖多个 CPython ABI，但 CUDA、PyTorch、MinkowskiEngine、glibc 和其他依赖仍需彼此兼容。普通用户建议统一使用 Python 3.10，减少环境组合问题。
@@ -87,8 +89,49 @@ python -m pip install -r requirements-asdepth.txt
 ```bash
 python -m pip install -r requirements.txt
 python -m pip install -r requirements-asdepth.txt
+```
+
+相机 SDK 按实际设备二选一安装。D435 可以直接安装：
+
+```bash
 python -m pip install -r requirements-realsense.txt
 ```
+
+当前 DaBai DC1 使用 legacy/OpenNI 固件时应使用 Orbbec SDK v1。本文按 PyOrbbecSDK 仓库的
+legacy `main` 分支验证；只安装 `pyorbbecsdk2` 不足以支持这类固件：
+
+```bash
+git clone --branch main https://github.com/orbbec/pyorbbecsdk.git
+cd pyorbbecsdk
+python -m pip install -r requirements.txt
+mkdir -p build
+cd build
+cmake -Dpybind11_DIR="$(pybind11-config --cmakedir)" ..
+make -j"$(nproc)"
+make install
+cd ..
+sudo bash scripts/install_udev_rules.sh
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+export PYTHONPATH="$PWD/install/lib:$PYTHONPATH"
+python -c "import pyorbbecsdk; print('PyOrbbecSDK v1: OK')"
+```
+
+请把 `PYTHONPATH` 配置持久化到目标主机的 Conda 激活脚本或 shell 配置中。
+
+在运行完整模型前，先单独验证相机采集。DaBai 默认无需指定后端：
+
+```bash
+python camera_capture.py --save-dir debug/camera
+```
+
+D435 自检命令为：
+
+```bash
+python camera_capture.py --camera-backend realsense --save-dir debug/camera
+```
+
+成功后会输出 `color.png`、`depth.png` 和 `camera_metadata.json`，不会加载 CUDA、AnyGrasp 或控制机械臂。
 
 MinkowskiEngine 与 CUDA、PyTorch 的版本耦合较强，因此没有写入通用 requirements。请按照 AnyGrasp SDK 和 MinkowskiEngine 的对应版本说明安装，然后检查环境：
 
@@ -97,7 +140,7 @@ python -c "import torch; print('torch:', torch.__version__); print('cuda availab
 python -c "import MinkowskiEngine; print('MinkowskiEngine: OK')"
 ```
 
-即使使用离线 RGB-D 图片，`asdepth_pipeline.py` 当前也会通过 `get_pose.py` 导入 `pyrealsense2`，所以完整抓取环境仍需安装 `requirements-realsense.txt`。
+离线 RGB-D 模式不会导入 `pyorbbecsdk` 或 `pyrealsense2`，无需安装相机 SDK。
 
 `install.sh` 仍可作为基于 `venv` 的备选安装方式，但它只安装基础依赖；Conda 是本文推荐和默认说明的环境管理方式。
 
@@ -178,7 +221,7 @@ example_data/depth.png
 
 ## 6. 先运行仅深度预测
 
-这是推荐的第一次运行方式，不会导入 AnyGrasp、RealSense 或 Piper：
+这是推荐的第一次运行方式，不会导入 AnyGrasp、相机 SDK 或 Piper：
 
 ```bash
 python asdepth_depth_only.py \
@@ -218,20 +261,25 @@ debug/asdepth-only/run_日期_时间/
 
 ## 7. 配置相机内参和抓取工作区
 
-在运行 AnyGrasp 前，必须把 [get_pose.py](get_pose.py) 中 `run_anygrasp()` 使用的参数改成现场相机和工作区参数：
+在线采集会从 Orbbec 或 RealSense SDK 自动读取深度对齐后的彩色相机内参，不需要再把 D435 的
+硬编码内参用于 DaBai。离线输入默认保留历史 `640 × 480` 内参；使用现场离线图片时应显式传入：
+
+```bash
+--camera-fx ... --camera-fy ... --camera-cx ... --camera-cy ...
+```
+
+抓取工作区仍需在 [get_pose.py](get_pose.py) 的 `run_anygrasp()` 中按现场修改：
 
 ```python
-# 相机内参，必须对应实际分辨率
-fx, fy = ...
-cx, cy = ...
-
 # 相机坐标系下的抓取范围，单位为米
 xmin, xmax = ...
 ymin, ymax = ...
 zmin, zmax = ...
 ```
 
-当前 RealSense 采集分辨率固定为 `640 × 480`，彩色流和深度流均为 30 FPS，深度会对齐到彩色图。内参必须对应对齐后的彩色相机分辨率。
+Orbbec 默认使用设备提供的默认彩色/深度 profile，并优先使用硬件 D2C 对齐，失败时尝试软件对齐。
+D435 默认使用 `640 × 480 @ 30 FPS`，可通过 `--camera-width`、`--camera-height` 和
+`--camera-fps` 修改。两种后端都会检查 RGB、对齐深度和内参分辨率是否一致。
 
 工作区用于排除桌面外、机械臂不可达或不希望抓取的点。如果内参、深度比例或工作区不正确，常见结果是点云位置错误、没有有效点或抓取位姿明显偏移。
 
@@ -266,9 +314,9 @@ python asdepth_pipeline.py \
 
 服务器没有图形桌面时不要添加 `--debug`，否则 Open3D 窗口可能无法创建。
 
-## 9. 使用 RealSense 在线检测
+## 9. 使用 Orbbec 或 RealSense 在线检测
 
-连接 RealSense 后，不传 `--rgb-image` 和 `--depth-image` 即可采集一帧并继续推理：
+不传 `--rgb-image` 和 `--depth-image` 时进入在线采集。默认后端是 Orbbec DaBai DC1：
 
 ```bash
 python asdepth_pipeline.py \
@@ -279,23 +327,42 @@ python asdepth_pipeline.py \
   --device cuda
 ```
 
-程序会等待约 30 帧让相机稳定，然后保存对齐后的 `color.png` 和 `depth.png`。如果设备报告的深度单位不是 `0.001 m`，请根据实际比例传入正确的 `--depth-scale`。
+使用 Intel RealSense D435 时显式选择后端：
+
+```bash
+python asdepth_pipeline.py \
+  --depth-checkpoint ckpts/depth_model.ckpt \
+  --depth-model defm_vit_l14_depth \
+  --grasp-checkpoint ckpts/checkpoint-rs.tar \
+  --camera-backend realsense \
+  --save-dir debug/asdepth \
+  --device cuda
+```
+
+也可以使用 `--camera-backend auto`，程序会先尝试 Orbbec，再尝试 RealSense。生产现场建议显式指定，
+避免同时连接多台相机时选错设备。
+
+程序会等待约 30 个有效帧让相机稳定，保存对齐后的 `color.png`、`depth.png` 和
+`camera_metadata.json`。在线模式会自动读取每米对应的 raw depth 单位数；只有在确认 SDK 报告值错误时
+才用 `--depth-scale` 覆盖。
 
 如果程序找不到相机，请先确认：
 
 - USB 连接和供电正常；
-- 系统已经安装 Intel RealSense SDK；
+- DaBai 使用 legacy PyOrbbecSDK v1，且 `python -c "import pyorbbecsdk"` 成功；
+- D435 已安装 RealSense SDK，且 `python -c "import pyrealsense2"` 成功；
 - 当前用户有访问相机设备的权限；
-- `python -c "import pyrealsense2"` 可以成功执行。
+- `dmesg` 中没有 `USB disconnect`、`Device not responding` 或 `error -71`。
 
 ## 10. 查看运行结果
 
-离线运行会创建 `run_...` 目录，RealSense 运行会创建 `capture_...` 目录。完整流程的主要输出如下：
+离线运行会创建 `run_...` 目录，相机运行会创建 `capture_...` 目录。完整流程的主要输出如下：
 
 ```text
 debug/asdepth/<本次运行目录>/
-├── color.png            # RealSense 模式生成
-├── depth.png            # RealSense 模式生成的原始深度
+├── color.png            # 相机模式生成的对齐目标彩色图
+├── depth.png            # 相机模式生成的对齐原始深度
+├── camera_metadata.json # 相机后端、序列号、深度比例和内参
 ├── pred_depth.npy       # 深度模型输出，float32，单位米
 ├── grasp_pose.txt       # 最佳抓取的旋转、平移和夹爪宽度
 ├── run_metadata.json    # 参数、文件路径、设备和耗时
@@ -343,7 +410,12 @@ python asdepth_pipeline.py \
 | --- | --- | --- |
 | `--depth-model` | 必填 | 显式选择 `defm_vit_l14_depth` 或 `defm_stackconv_depth` |
 | `--device` | `auto` | 深度模型推理设备，例如 `cuda`、`mps` 或 `cpu` |
-| `--depth-scale` | `1000` | 原始深度值除以该数后得到米 |
+| `--camera-backend` | `orbbec` | 在线相机后端：`orbbec`、`realsense` 或 `auto` |
+| `--camera-width/height/fps` | `640/480/30` | D435 在线流参数；Orbbec 使用设备默认 profile |
+| `--camera-warmup-frames` | `30` | 保存前等待的有效 RGB-D 帧数 |
+| `--camera-timeout` | `20` | 在线采集超时，单位秒 |
+| `--depth-scale` | 在线自动、离线 `1000` | 原始深度值除以该数后得到米；显式值可覆盖相机报告值 |
+| `--camera-fx/fy/cx/cy` | 自动/历史值 | 覆盖点云投影内参，四项必须同时提供 |
 | `--max-depth` | `10` | 深度有效上限，单位米 |
 | `--input-size` | `518` | 深度模型预处理目标尺寸 |
 | `--resize-method` | `lower_bound` | 预处理缩放方式 |
@@ -379,9 +451,20 @@ python asdepth_pipeline.py --help
 
 这是二进制运行环境不匹配。检查 Linux/glibc、CUDA、PyTorch、MinkowskiEngine 和 GSNet 是否使用兼容版本。
 
-### 离线完整流程仍提示缺少 `pyrealsense2`
+### DaBai 报告缺少 `pyorbbecsdk`
 
-这是当前代码的已知依赖边界：完整入口会导入 `get_pose.py`。安装 `requirements-realsense.txt`；如果所在平台无法安装，请只运行深度入口，或改到支持 RealSense Python 包的 Linux 环境。
+DaBai 使用 legacy/OpenNI 固件时请从官方 PyOrbbecSDK 仓库的 `main` 分支构建，并确认其
+`install/lib` 已加入当前 Conda 环境的 `PYTHONPATH`。只安装 `pyorbbecsdk2` 通常不足以识别这类固件。
+
+### D435 报告缺少 `pyrealsense2` 或 `No device connected`
+
+确认命令包含 `--camera-backend realsense`，再检查 `requirements-realsense.txt`、RealSense udev
+规则、`rs-enumerate-devices` 和 USB 连接。若未传该参数，程序默认会尝试 Orbbec。
+
+### Orbbec 出现 `error -71` 或反复 `USB disconnect`
+
+这是 USB 协议、信号或供电问题，不是模型错误。移除外部 Hub/延长线，改用可靠的短数据线和主机直连
+接口；在 `dmesg -w` 不再出现断连后再测试 SDK。
 
 ### 深度模型 checkpoint 不兼容
 
@@ -405,7 +488,8 @@ DeFM 桥接会主动使用非 xFormers 路径以保持 checkpoint 参数结构�
 - `asdepth_depth_only.py`：推荐的深度模型离线验证入口；
 - `asdepth_pipeline.py`：推荐的完整抓取入口；
 - `demo.py` / `demo.sh`：只使用 AnyGrasp 的离线场景示例，读取 `test_color.png` 和 `test_depth.png`，不经过深度补全模型；
-- `get_pose.py`：RealSense 采集和 AnyGrasp 的底层实现，包含现场相机内参与工作区；
+- `camera_capture.py`：Orbbec/RealSense 在线采集、深度对齐、比例和内参元数据；
+- `get_pose.py`：AnyGrasp 点云与抓取实现，包含现场工作区；
 - `grasp_piper.py`：Piper 坐标转换和控制逻辑；
 - `USAGE.md`：AnyGrasp 2026 SDK 接口和 steering 参数说明。
 
@@ -421,7 +505,7 @@ ruff check .
 ruff format --check .
 ```
 
-Ruff 规则集中配置在 `pyproject.toml` 中，并排除了按上游原样保留的 vendor 代码。单元测试不会加载真实 checkpoint、GSNet 或 RealSense，也不会控制机械臂。真实 CUDA、许可证、相机和机械臂仍需在目标 Linux 主机上分别验收。
+Ruff 规则集中配置在 `pyproject.toml` 中，并排除了按上游原样保留的 vendor 代码。单元测试不会加载真实 checkpoint、GSNet、Orbbec 或 RealSense，也不会控制机械臂。真实 CUDA、许可证、相机和机械臂仍需在目标 Linux 主机上分别验收。
 
 ## 第三方代码与边界
 

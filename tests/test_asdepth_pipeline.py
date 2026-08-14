@@ -15,6 +15,7 @@ import torch
 import asdepth_depth
 import asdepth_pipeline
 from asdepth_depth import CheckpointLoadReport
+from camera_capture import CameraIntrinsics, CaptureResult
 
 
 class PipelineSafetyTests(unittest.TestCase):
@@ -65,6 +66,18 @@ class PipelineSafetyTests(unittest.TestCase):
             model_id="defm_vit_l14_depth",
         )
 
+    def test_default_camera_backend_is_orbbec(self) -> None:
+        args = asdepth_pipeline.build_parser().parse_args(
+            [
+                "--depth-checkpoint",
+                "asdepth.ckpt",
+                "--depth-model",
+                "defm_stackconv_depth",
+            ]
+        )
+
+        self.assertEqual(args.camera_backend, "orbbec")
+
     def test_default_run_does_not_import_or_execute_piper(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             directory = Path(value)
@@ -78,8 +91,8 @@ class PipelineSafetyTests(unittest.TestCase):
             with (
                 mock.patch.object(
                     asdepth_pipeline,
-                    "_load_anygrasp_functions",
-                    return_value=(mock.Mock(), fake_grasp),
+                    "_load_anygrasp_function",
+                    return_value=fake_grasp,
                 ),
                 mock.patch.object(
                     asdepth_pipeline,
@@ -116,10 +129,9 @@ class PipelineSafetyTests(unittest.TestCase):
             with (
                 mock.patch.object(
                     asdepth_pipeline,
-                    "_load_anygrasp_functions",
-                    return_value=(
-                        mock.Mock(),
-                        mock.Mock(return_value=(np.eye(3), np.array([0.1, 0.2, 0.3]), 0.04)),
+                    "_load_anygrasp_function",
+                    return_value=mock.Mock(
+                        return_value=(np.eye(3), np.array([0.1, 0.2, 0.3]), 0.04)
                     ),
                 ),
                 mock.patch.object(asdepth_pipeline, "_load_arm_runner", return_value=arm_runner),
@@ -138,6 +150,77 @@ class PipelineSafetyTests(unittest.TestCase):
 
             arm_runner.assert_called_once()
             self.assertTrue(result["arm_executed"])
+
+    def test_online_capture_uses_camera_depth_scale_and_intrinsics(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            directory = Path(value)
+            _, _, depth_checkpoint, grasp_checkpoint = self._fixture(directory)
+            run_dir = directory / "capture"
+            run_dir.mkdir()
+            color_path = run_dir / "color.png"
+            depth_path = run_dir / "depth.png"
+            metadata_path = run_dir / "camera_metadata.json"
+            cv2.imwrite(str(color_path), np.zeros((4, 6, 3), dtype=np.uint8))
+            cv2.imwrite(str(depth_path), np.full((4, 6), 2000, dtype=np.uint16))
+            metadata_path.write_text("{}", encoding="utf-8")
+            intrinsics = CameraIntrinsics(500.0, 501.0, 3.0, 2.0, 6, 4)
+            capture = CaptureResult(
+                run_dir=run_dir,
+                color_path=color_path,
+                depth_path=depth_path,
+                metadata_path=metadata_path,
+                raw_units_per_meter=2000.0,
+                intrinsics=intrinsics,
+                backend="orbbec",
+                camera_name="DaBai DC1",
+                serial_number="test-serial",
+            )
+            args = asdepth_pipeline.build_parser().parse_args(
+                [
+                    "--depth-checkpoint",
+                    str(depth_checkpoint),
+                    "--depth-model",
+                    "defm_stackconv_depth",
+                    "--grasp-checkpoint",
+                    str(grasp_checkpoint),
+                    "--save-dir",
+                    str(directory / "runs"),
+                ]
+            )
+            observed: dict[str, object] = {}
+
+            def fake_predict(_loaded, _color, _depth, **kwargs):
+                observed["depth_scale"] = kwargs["depth_scale"]
+                return np.full((4, 6), 1.0, dtype=np.float32)
+
+            def fake_grasp(_save_dir, cfg, *, rgb, depth):
+                observed["intrinsics"] = cfg.camera_intrinsics
+                return np.eye(3), np.array([0.1, 0.2, 0.3]), 0.04
+
+            with (
+                mock.patch.object(asdepth_pipeline, "_capture_camera", return_value=capture),
+                mock.patch.object(
+                    asdepth_pipeline,
+                    "_load_anygrasp_function",
+                    return_value=fake_grasp,
+                ),
+                mock.patch.object(
+                    asdepth_depth,
+                    "load_depth_model",
+                    return_value=self._loaded(depth_checkpoint),
+                ),
+                mock.patch.object(asdepth_depth, "predict_depth", side_effect=fake_predict),
+            ):
+                result = asdepth_pipeline.run(args)
+
+            self.assertEqual(observed["depth_scale"], 2000.0)
+            self.assertEqual(
+                observed["intrinsics"],
+                {"fx": 500.0, "fy": 501.0, "cx": 3.0, "cy": 2.0},
+            )
+            metadata = json.loads(Path(result["metadata"]).read_text(encoding="utf-8"))
+            self.assertEqual(metadata["camera_backend"], "orbbec")
+            self.assertEqual(metadata["camera_serial_number"], "test-serial")
 
     def test_main_converts_expected_type_error_to_exit_code_two(self) -> None:
         stderr = io.StringIO()

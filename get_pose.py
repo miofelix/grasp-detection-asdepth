@@ -1,64 +1,22 @@
 import argparse
-import datetime
 import os
 
 import cv2
 import numpy as np
 import open3d as o3d
-import pyrealsense2 as rs
 from PIL import Image
 
 from anygrasp_runtime import create_detector, predict_grasps
+from camera_capture import capture_one_frame as capture_rgbd_frame
 
 # ----------------- 参数 -----------------
 
 
-# ----------------- Realsense 获取一帧 -----------------
-def capture_one_frame(base_dir):
-    # === 带时间戳的子目录 ===
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_dir = os.path.join(base_dir, f"capture_{timestamp}")
-    os.makedirs(save_dir, exist_ok=True)
+# ----------------- RGB-D 相机获取一帧 -----------------
+def capture_one_frame(base_dir, camera_backend="orbbec"):
+    """兼容旧调用方式，默认使用 Orbbec，返回采集目录字符串。"""
 
-    pipeline = rs.pipeline()
-    config = rs.config()
-    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-
-    profile = pipeline.start(config)
-    align = rs.align(rs.stream.color)
-
-    depth_sensor = profile.get_device().first_depth_sensor()
-    depth_scale = depth_sensor.get_depth_scale()
-    print("Depth Scale is:", depth_scale)
-
-    frame_count = 0
-    color_path = os.path.join(save_dir, "color.png")
-    depth_path = os.path.join(save_dir, "depth.png")
-
-    try:
-        while True:
-            frames = pipeline.wait_for_frames()
-            aligned_frames = align.process(frames)
-            aligned_depth_frame = aligned_frames.get_depth_frame()
-            color_frame = aligned_frames.get_color_frame()
-
-            if not aligned_depth_frame or not color_frame:
-                continue
-
-            depth_image = np.asanyarray(aligned_depth_frame.get_data())
-            color_image = np.asanyarray(color_frame.get_data())
-
-            frame_count += 1
-            if frame_count > 30:  # 等待相机稳定
-                cv2.imwrite(color_path, color_image)
-                cv2.imwrite(depth_path, depth_image)
-                print(f"Saved one frame: {color_path}, {depth_path}")
-                break
-    finally:
-        pipeline.stop()
-
-    return save_dir
+    return str(capture_rgbd_frame(base_dir, backend=camera_backend).run_dir)
 
 
 # ----------------- AnyGrasp Demo -----------------
@@ -71,16 +29,24 @@ def run_anygrasp(save_dir, cfgs, data_dir=None, rgb=None, depth=None):
     if data_dir is not None:
         colors = np.array(Image.open(os.path.join(data_dir, "color.png")), dtype=np.float32) / 255.0
         depths = np.array(Image.open(os.path.join(data_dir, "depth.png")))
-        points_z = depths / 1000.0
+        points_z = depths / float(getattr(cfgs, "depth_scale", 1000.0))
     else:
         colors = rgb
         colors = cv2.cvtColor(colors, cv2.COLOR_BGR2RGB)  # 转成 RGB
         colors = colors.astype(np.float32) / 255.0
         depths = depth
         points_z = depths
-    # 相机内参（要改成你的相机参数）
-    fx, fy = 616.22601724, 615.78839082
-    cx, cy = 315.33494299, 251.59150012
+    # 在线模式由相机 SDK 提供对齐后彩色相机内参；离线旧调用保留历史默认值。
+    camera_intrinsics = getattr(cfgs, "camera_intrinsics", None) or {
+        "fx": 616.22601724,
+        "fy": 615.78839082,
+        "cx": 315.33494299,
+        "cy": 251.59150012,
+    }
+    fx = float(camera_intrinsics["fx"])
+    fy = float(camera_intrinsics["fy"])
+    cx = float(camera_intrinsics["cx"])
+    cy = float(camera_intrinsics["cy"])
     xmin, xmax = -0.10, 0.10
     ymin, ymax = -0.2, 0.07
     zmin, zmax = 0.2, 1.0
@@ -151,7 +117,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_dir", default="debug/funny", help="Directory to save captured frame"
     )
+    parser.add_argument(
+        "--camera_backend",
+        choices=["orbbec", "realsense", "auto"],
+        default="orbbec",
+    )
     cfgs = parser.parse_args()
     cfgs.max_gripper_width = max(0, min(0.1, cfgs.max_gripper_width))
-    save_dir = capture_one_frame(cfgs.save_dir)
-    run_anygrasp(save_dir, cfgs)
+    capture = capture_rgbd_frame(cfgs.save_dir, backend=cfgs.camera_backend)
+    cfgs.depth_scale = capture.raw_units_per_meter
+    cfgs.camera_intrinsics = {
+        "fx": capture.intrinsics.fx,
+        "fy": capture.intrinsics.fy,
+        "cx": capture.intrinsics.cx,
+        "cy": capture.intrinsics.cy,
+    }
+    run_anygrasp(str(capture.run_dir), cfgs, data_dir=str(capture.run_dir))

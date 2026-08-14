@@ -7,7 +7,7 @@ torch>=2.0
 torchvision>=0.15
 graspnetAPI>=1.2.10
 
-# RealSense: 见 requirements-realsense.txt（macOS 常无 PyPI 包，勿写在本文件）
+# 相机 SDK 按设备选装：DaBai 见 requirements-orbbec.txt，D435 见 requirements-realsense.txt。
 
 # Piper 机械臂下位机 (grasp_piper.py)
 piper_sdk>=0.2.0
