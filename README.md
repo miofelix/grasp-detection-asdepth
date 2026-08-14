@@ -1,26 +1,53 @@
 # grasp_detection
 
-本仓库保留师兄原有的 AnyGrasp、点云和 Piper 控制代码，同时新增了一条本地 AS-Depth-2
+本仓库保留师兄原有的 AnyGrasp、点云和 Piper 控制代码，同时提供可选择模型的本地 AS-Depth
 RGB-D 推理入口。旧的 `pipline.py` 未修改，仍对应原来的远程 GAVP + AprilTag 流程。
 
 AnyGrasp SDK 资产同步自 `/Users/felix/Projects/anygrasp_sdk` 的 `b8eaafc` 快照；其中
 `grasp_detection` 的最后一项二进制更新为 `ada42fa`（glibc compatibility）。官方 SDK
 源码不在本仓库修改，本项目通过 `anygrasp_runtime.py` 调用其公开接口并注入自己的相机与工作区配置。
 
-## AS-Depth 抓取入口
+## AS-Depth 多模型抓取入口
 
 新入口的数据流为：
 
 ```text
 RealSense 对齐 RGB-D
-  → AS-Depth-2 defm_stackconv_depth
+  → AS-Depth canonical catalog 模型
   → meter 深度图
   → 现有 get_pose.run_anygrasp
   → 可选 grasp_piper.run_pipline
 ```
 
-只迁入了 `defm_stackconv_depth` 的模型数学代码、必要的 DINOv2/DeFM/MoGe 派生实现、
-checkpoint loader 和 RGB-D 预处理。训练、评估、数据集、Web、TensorRT、其他模型和权重均未迁移。
+仓库内置由 AS-Depth Research `214e501` 构建的 `as-depth 0.3.0` wheel，使用其 canonical
+模型 catalog、checkpoint loader 和内存 RGB-D 推理接口。checkpoint、训练数据和运行产物仍由外部提供。
+原有 `asdepth_depth/models` 仅作为早期 AS-Depth-2 迁移的兼容快照；新模型必须通过正式 catalog 选择。
+
+### 支持的模型架构
+
+当前 catalog 包含 20 个活跃 `model_id`，主要覆盖：
+
+| 架构族 | 代表 model_id | 原生输出 |
+|---|---|---|
+| 双 DINOv2 CDM | `cdm_vitl_depth`、`cdm_vitl_disp`、D435/L515 pretrained | metric / inverse depth |
+| DeFM ViT-L14 | `defm_vit_l14_depth`、`defm_vit_l14_random_raw` | metric depth |
+| DINOv2 stack-conv | `stackconv_depth_multidataset`、`stackconv_depth_multidataset_new_fusion` | metric depth |
+| DeFM stack-conv | `defm_stackconv_depth`、`defm_stackconv_no_adaptor_depth`、sparse-raw | metric depth |
+| DeFM auxiliary/multitask | `defm_stackconv_mask_normal_depth`、`defm_stackconv_multitask_depth` | depth + auxiliary heads |
+
+查看完整 catalog：
+
+```bash
+python asdepth_models.py
+python asdepth_models.py --json
+```
+
+模型身份、完整列表、深度语义和 checkpoint 格式见 `docs/ASDEPTH_MODELS.md`。
+
+CLI 默认仍使用 `defm_stackconv_depth`，以兼容现有 AS-Depth-2 checkpoint。通过
+`--depth-model <model_id>` 选择其他模型；使用 `--depth-model auto` 时按 checkpoint envelope manifest
+或 AS-Depth 历史路径 registry 解析。inverse-depth 模型的 raw depth 输入和模型输出都会在适配层显式
+转换，交给 AnyGrasp 的结果始终是 finite、非负、`float32`、meter 深度。
 
 ### 环境
 
@@ -40,6 +67,8 @@ python3.10 -m pip install -r requirements.txt
 python3.10 -m pip install -r requirements-asdepth.txt
 python3.10 -m pip install -r requirements-realsense.txt
 ```
+
+仓库不绑定环境管理器；上述 requirements 可用于标准 `venv`、Conda 或其他兼容环境。
 
 完整抓取入口复用现有 `get_pose.py`，而该文件在模块加载时会导入 `pyrealsense2`，所以
 `asdepth_pipeline.py` 的离线 RGB-D 模式同样需要上述 RealSense Python 依赖。仅深度预测可使用
@@ -66,11 +95,13 @@ python -c "from anygrasp_runtime import load_gsnet_module; load_gsnet_module().c
 ### macOS 仅深度预测
 
 macOS（包括 Apple Silicon）不能加载仓库中的 Linux x86-64 AnyGrasp GSNet 二进制。如果只想在
-Mac 上验证 AS-Depth 的 RGB-D 深度预测，可使用不导入 AnyGrasp、RealSense 或 Piper 的独立入口：
+Mac 上验证任意 AS-Depth catalog 模型的 RGB-D 深度预测，可使用不导入 AnyGrasp、RealSense 或
+Piper 的独立入口：
 
 ```bash
 python asdepth_depth_only.py \
-  --depth-checkpoint /path/to/asdepth2.ckpt \
+  --depth-checkpoint /path/to/model.ckpt \
+  --depth-model defm_stackconv_depth \
   --rgb-image example_data/color.png \
   --depth-image example_data/depth.png \
   --save-dir debug/asdepth-only \
@@ -88,7 +119,8 @@ GSNet/AnyGrasp 二进制还受 CUDA、MinkowskiEngine、glibc 和许可证环境
 
 ```bash
 python asdepth_pipeline.py \
-  --depth-checkpoint /path/to/asdepth2.ckpt \
+  --depth-checkpoint /path/to/model.ckpt \
+  --depth-model defm_stackconv_depth \
   --grasp-checkpoint ckpts/checkpoint-rs.tar \
   --rgb-image example_data/color.png \
   --depth-image example_data/depth.png \
@@ -101,7 +133,8 @@ python asdepth_pipeline.py \
 
 ```bash
 python asdepth_pipeline.py \
-  --depth-checkpoint /path/to/asdepth2.ckpt \
+  --depth-checkpoint /path/to/model.ckpt \
+  --depth-model defm_stackconv_depth \
   --grasp-checkpoint ckpts/checkpoint-rs.tar \
   --save-dir debug/asdepth
 ```
@@ -144,6 +177,7 @@ RealSense、AnyGrasp 和 Piper 属于 Linux 服务器/硬件验收。
 
 ## 第三方代码
 
-`asdepth_depth/` 迁移自 AS-Depth，并包含 ByteDance Seed CDM、Meta DINOv2、ETH Zurich DeFM
-和 MoGe 的派生实现。各 vendor 文件保留原始版权声明；完整说明见 `ASDEPTH_NOTICE` 和
-`ASDEPTH_LICENSE`。这些文件与仓库已有闭源 AnyGrasp SDK/许可证相互独立。
+`vendor/as_depth-0.3.0-py3-none-any.whl` 与旧 `asdepth_depth/` 兼容快照来自 AS-Depth，并包含
+ByteDance Seed CDM、Meta DINOv2、ETH Zurich DeFM 和 MoGe 的派生实现。完整来源、范围和校验值见
+`vendor/README.md`、`ASDEPTH_NOTICE` 与 `ASDEPTH_LICENSE`。这些内容与闭源 AnyGrasp SDK/许可证
+相互独立。

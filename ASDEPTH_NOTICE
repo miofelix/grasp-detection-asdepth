@@ -10,6 +10,13 @@ The stack-convolution decoder contains concepts and code derived from MoGe.
 The DeFM implementation contains code derived from ETH Zurich's DeFM project.
 Individual vendored files retain their original copyright and SPDX notices.
 
-Only the defm_stackconv_depth inference dependency closure was migrated into
-this repository. Training, evaluation, deployment, datasets, other model
-variants, checkpoints, and runtime artifacts were not copied.
+The bundled `as-depth` 0.3.0 wheel exposes the canonical 20-model catalog and
+the shared checkpoint/in-memory inference APIs. The integration supports the
+active CDM, DeFM, DINOv2 stack-conv, DeFM stack-conv, sparse-raw, mask-normal,
+and multitask families. Checkpoints, datasets, and runtime artifacts are not
+included.
+
+The older `asdepth_depth/models` tree remains only as a compatibility snapshot
+for the original `defm_stackconv_depth` migration. New model selection and
+inference must use the packaged `asdepth` catalog rather than extending that
+snapshot.

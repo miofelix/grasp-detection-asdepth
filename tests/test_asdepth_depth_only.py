@@ -47,6 +47,14 @@ class DepthOnlyPipelineTests(unittest.TestCase):
             loaded = SimpleNamespace(
                 checkpoint=CheckpointLoadReport(checkpoint, "state_dict", 804, ()),
                 device=torch.device("cpu"),
+                metadata={
+                    "model_id": "defm_stackconv_depth",
+                    "model_version": "test",
+                    "config_hash": "test-hash",
+                    "native_depth": "metric_depth",
+                    "sparse_raw_depth": False,
+                    "resolution_source": "test",
+                },
             )
             with (
                 mock.patch.object(asdepth_depth, "load_depth_model", return_value=loaded),
@@ -63,6 +71,7 @@ class DepthOnlyPipelineTests(unittest.TestCase):
             self.assertTrue(np.all(prediction == 1.5))
             metadata = json.loads(Path(result["metadata"]).read_text(encoding="utf-8"))
             self.assertEqual(metadata["mode"], "asdepth_depth_only")
+            self.assertEqual(metadata["model_id"], "defm_stackconv_depth")
             self.assertEqual(metadata["prediction_unit"], "meter")
             self.assertEqual(metadata["depth_checkpoint_tensor_count"], 804)
 

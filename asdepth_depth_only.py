@@ -1,4 +1,4 @@
-"""离线 RGB-D → AS-Depth-2 深度预测入口。
+"""离线 RGB-D → AS-Depth catalog 模型深度预测入口。
 
 该入口不导入 AnyGrasp、RealSense 或 Piper，适合在 macOS 上验证
 AS-Depth 的模型与预处理。完整抓取流程仍使用 ``asdepth_pipeline.py``。
@@ -21,10 +21,15 @@ import numpy as np
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="使用离线 RGB-D 图像运行 AS-Depth-2 深度预测（不需要 AnyGrasp/RealSense/Piper）",
+        description="使用离线 RGB-D 图像运行 AS-Depth catalog 模型（不需要 AnyGrasp/RealSense/Piper）",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--depth-checkpoint", required=True, help="AS-Depth-2 checkpoint 路径")
+    parser.add_argument("--depth-checkpoint", required=True, help="AS-Depth checkpoint 文件或目录")
+    parser.add_argument(
+        "--depth-model",
+        default="defm_stackconv_depth",
+        help="canonical model_id；使用 auto 时按 checkpoint manifest/历史路径解析",
+    )
     parser.add_argument("--rgb-image", required=True, help="离线 RGB 图像路径")
     parser.add_argument("--depth-image", required=True, help="离线 raw depth 图像路径")
     parser.add_argument("--save-dir", default="debug/asdepth-only", help="运行产物根目录")
@@ -54,6 +59,13 @@ def _resolve_file(path: str | Path, *, label: str) -> Path:
     resolved = Path(path).expanduser().resolve()
     if not resolved.is_file():
         raise FileNotFoundError(f"{label} does not exist: {resolved}")
+    return resolved
+
+
+def _resolve_checkpoint(path: str | Path) -> Path:
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.exists() or not (resolved.is_file() or resolved.is_dir()):
+        raise FileNotFoundError(f"AS-Depth checkpoint does not exist: {resolved}")
     return resolved
 
 
@@ -108,7 +120,7 @@ def _write_metadata(path: Path, metadata: dict[str, Any]) -> None:
 
 
 def run(args: argparse.Namespace) -> dict[str, str]:
-    depth_checkpoint = _resolve_file(args.depth_checkpoint, label="AS-Depth checkpoint")
+    depth_checkpoint = _resolve_checkpoint(args.depth_checkpoint)
     rgb_path = _resolve_file(args.rgb_image, label="RGB image")
     depth_path = _resolve_file(args.depth_image, label="raw depth image")
     run_dir = _new_run_dir(args.save_dir)
@@ -119,12 +131,14 @@ def run(args: argparse.Namespace) -> dict[str, str]:
     load_started = time.perf_counter()
     loaded = load_depth_model(
         depth_checkpoint,
+        model_id=args.depth_model,
         device=args.device,
         trusted_pickle=args.trusted_depth_checkpoint,
     )
     load_ms = (time.perf_counter() - load_started) * 1000.0
     checkpoint_report = loaded.checkpoint
     resolved_device = str(loaded.device)
+    model_metadata = dict(loaded.metadata)
     depth_started = time.perf_counter()
     try:
         prediction = predict_depth(
@@ -148,11 +162,18 @@ def run(args: argparse.Namespace) -> dict[str, str]:
         "schema_version": "1.0.0",
         "mode": "asdepth_depth_only",
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "model_id": "defm_stackconv_depth",
+        **model_metadata,
         "depth_checkpoint": str(depth_checkpoint),
         "depth_checkpoint_source_key": checkpoint_report.source_key,
         "depth_checkpoint_tensor_count": checkpoint_report.tensor_count,
         "depth_checkpoint_stripped_prefixes": list(checkpoint_report.stripped_prefixes),
+        "depth_checkpoint_step": getattr(checkpoint_report, "step", None),
+        "depth_checkpoint_missing_keys": list(
+            getattr(checkpoint_report, "missing_keys", ())
+        ),
+        "depth_checkpoint_unexpected_keys": list(
+            getattr(checkpoint_report, "unexpected_keys", ())
+        ),
         "rgb_image": str(rgb_path),
         "raw_depth_image": str(depth_path),
         "prediction": str(prediction_path),

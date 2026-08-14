@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ import torch
 from asdepth_depth import (
     CheckpointLoadReport,
     LoadedDepthModel,
+    list_depth_models,
     load_checkpoint,
     predict_depth,
     prepare_rgbd_input,
@@ -22,6 +24,11 @@ from asdepth_depth.preprocess import metric_depth_from_raw, output_size
 class _ToyDepthModel(torch.nn.Module):
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return inputs[:, 3] + 0.25
+
+
+class _IdentityDepthModel(torch.nn.Module):
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return inputs[:, 3]
 
 
 class PreprocessTests(unittest.TestCase):
@@ -97,6 +104,44 @@ class InferenceTests(unittest.TestCase):
         self.assertEqual(prediction.dtype, np.float32)
         self.assertTrue(np.isfinite(prediction).all())
         self.assertTrue((prediction >= 0.0).all())
+
+    def test_inverse_depth_catalog_model_is_normalized_to_metric_output(self) -> None:
+        from asdepth.core import DepthSpec
+
+        loaded = LoadedDepthModel(
+            _IdentityDepthModel(),
+            torch.device("cpu"),
+            CheckpointLoadReport(Path("model.ckpt"), "root", 1, ()),
+            model_id="cdm_vitl_disp",
+            native_depth="inverse_depth",
+            spec=mock.Mock(depth=DepthSpec.inverse()),
+        )
+        color = np.zeros((4, 6, 3), dtype=np.uint8)
+        raw = np.full((4, 6), 2000, dtype=np.uint16)
+
+        prediction = predict_depth(loaded, color, raw, input_size=14)
+
+        self.assertEqual(prediction.shape, (4, 6))
+        np.testing.assert_allclose(prediction, 2.0)
+
+
+class ModelCatalogTests(unittest.TestCase):
+    def test_catalog_exposes_all_active_model_families(self) -> None:
+        models = list_depth_models()
+        model_ids = {item.model_id for item in models}
+
+        self.assertEqual(len(models), 20)
+        self.assertIn("cdm_vitl_depth", model_ids)
+        self.assertIn("defm_vit_l14_depth", model_ids)
+        self.assertIn("stackconv_depth_multidataset", model_ids)
+        self.assertIn("defm_stackconv_depth", model_ids)
+        self.assertIn("defm_stackconv_multitask_depth", model_ids)
+
+    def test_every_catalog_entrypoint_is_importable(self) -> None:
+        for item in list_depth_models():
+            module_name, class_name = item.entrypoint.split(":", maxsplit=1)
+            model_class = getattr(importlib.import_module(module_name), class_name)
+            self.assertTrue(issubclass(model_class, torch.nn.Module), item.model_id)
 
 
 if __name__ == "__main__":

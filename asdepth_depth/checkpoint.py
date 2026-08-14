@@ -1,4 +1,4 @@
-"""AS-Depth-2 旧单文件 checkpoint 的最小安全加载器。"""
+"""旧 AS-Depth-2 单文件 checkpoint 的兼容加载器。"""
 
 from __future__ import annotations
 

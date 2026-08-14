@@ -1,4 +1,5 @@
-# AS-Depth-2 单模型桥接依赖。建议与 requirements.txt 在同一个 CPython 3.10 环境安装。
+# AS-Depth 多模型推理依赖。建议与 requirements.txt 在同一个 CPython 3.10 环境安装。
+./vendor/as_depth-0.3.0-py3-none-any.whl
 numpy>=1.26
 opencv-python>=4.9
 Pillow>=10.0

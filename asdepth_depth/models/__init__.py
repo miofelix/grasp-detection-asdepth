@@ -1,4 +1,4 @@
-"""仅包含 ``defm_stackconv_depth`` 所需的模型数学实现。"""
+"""旧 ``defm_stackconv_depth`` 兼容快照；新模型使用 ``asdepth.models`` catalog。"""
 
 from .variants.defm_stackconv import DeFMStackConvRGBDDepth
 

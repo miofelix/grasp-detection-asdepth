@@ -1,4 +1,4 @@
-"""RealSense BGR/raw depth 到 AS-Depth-2 四通道输入的预处理。"""
+"""深度清理与旧 AS-Depth-2 四通道预处理兼容实现。"""
 
 from __future__ import annotations
 
