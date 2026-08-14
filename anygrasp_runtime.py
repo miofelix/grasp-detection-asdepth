@@ -16,6 +16,8 @@ from typing import Any
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+_GSNET_MODULE: ModuleType | None = None
+_GSNET_BINARY: Path | None = None
 
 
 def matching_gsnet_path(project_root: str | Path = PROJECT_ROOT) -> Path:
@@ -49,14 +51,32 @@ def matching_gsnet_path(project_root: str | Path = PROJECT_ROOT) -> Path:
 def load_gsnet_module(project_root: str | Path = PROJECT_ROOT) -> ModuleType:
     """以模块名 ``gsnet`` 加载当前解释器对应的版本化扩展。"""
 
+    global _GSNET_BINARY, _GSNET_MODULE
+
     binary = matching_gsnet_path(project_root)
+    resolved_binary = binary.resolve()
+    if _GSNET_MODULE is not None:
+        if resolved_binary != _GSNET_BINARY:
+            raise RuntimeError(
+                f"GSNet was already loaded from {_GSNET_BINARY}; cannot switch to {resolved_binary}"
+            )
+        return _GSNET_MODULE
+
     existing = sys.modules.get("gsnet")
     if existing is not None:
+        marked_binary = getattr(existing, "__anygrasp_binary_path__", None)
+        if marked_binary and Path(str(marked_binary)).resolve() == resolved_binary:
+            _GSNET_MODULE = existing
+            _GSNET_BINARY = resolved_binary
+            return existing
         existing_file = Path(str(getattr(existing, "__file__", ""))).resolve()
-        if existing_file != binary.resolve():
+        if existing_file != resolved_binary:
             raise RuntimeError(
-                f"gsnet is already loaded from {existing_file}; expected {binary.resolve()}"
+                f"gsnet is already loaded from {existing_file}; expected {resolved_binary}"
             )
+        existing.__anygrasp_binary_path__ = str(resolved_binary)
+        _GSNET_MODULE = existing
+        _GSNET_BINARY = resolved_binary
         return existing
 
     spec = importlib.util.spec_from_file_location("gsnet", binary)
@@ -69,7 +89,11 @@ def load_gsnet_module(project_root: str | Path = PROJECT_ROOT) -> ModuleType:
     except Exception:
         sys.modules.pop("gsnet", None)
         raise
-    return module
+    loaded = sys.modules.get("gsnet", module)
+    loaded.__anygrasp_binary_path__ = str(resolved_binary)
+    _GSNET_MODULE = loaded
+    _GSNET_BINARY = resolved_binary
+    return loaded
 
 
 def validate_license_dir(project_root: str | Path = PROJECT_ROOT) -> Path:

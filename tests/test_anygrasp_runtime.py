@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -30,6 +30,18 @@ class FakeGraspGroup:
 
 
 class AnyGraspRuntimeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.previous_gsnet = anygrasp_runtime.sys.modules.pop("gsnet", None)
+        anygrasp_runtime._GSNET_MODULE = None
+        anygrasp_runtime._GSNET_BINARY = None
+
+    def tearDown(self) -> None:
+        anygrasp_runtime.sys.modules.pop("gsnet", None)
+        if self.previous_gsnet is not None:
+            anygrasp_runtime.sys.modules["gsnet"] = self.previous_gsnet
+        anygrasp_runtime._GSNET_MODULE = None
+        anygrasp_runtime._GSNET_BINARY = None
+
     def test_matching_binary_uses_current_extension_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
@@ -57,6 +69,68 @@ class AnyGraspRuntimeTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "Linux x86-64"),
         ):
             anygrasp_runtime.matching_gsnet_path()
+
+    def test_load_gsnet_module_reuses_module_after_sdk_rewrites_file(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            versions = root / "gsnet_versions"
+            versions.mkdir()
+            binary = versions / "gsnet.cpython-310-x86_64-linux-gnu.so"
+            binary.write_bytes(b"binary")
+            module = ModuleType("gsnet")
+            module.__file__ = str(binary)
+
+            class FakeLoader:
+                @staticmethod
+                def exec_module(loaded: ModuleType) -> None:
+                    loaded.__file__ = str(versions / "gsnet" / "__init__.py")
+
+            spec = SimpleNamespace(loader=FakeLoader())
+            with (
+                mock.patch.object(
+                    anygrasp_runtime,
+                    "matching_gsnet_path",
+                    return_value=binary,
+                ),
+                mock.patch.object(
+                    anygrasp_runtime.importlib.util,
+                    "spec_from_file_location",
+                    return_value=spec,
+                ),
+                mock.patch.object(
+                    anygrasp_runtime.importlib.util,
+                    "module_from_spec",
+                    return_value=module,
+                ),
+            ):
+                first = anygrasp_runtime.load_gsnet_module(root)
+                second = anygrasp_runtime.load_gsnet_module(root)
+
+            self.assertIs(first, module)
+            self.assertIs(second, module)
+            self.assertEqual(
+                module.__anygrasp_binary_path__,
+                str(binary.resolve()),
+            )
+
+    def test_load_gsnet_module_still_rejects_external_name_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            binary = root / "gsnet.cpython-310-x86_64-linux-gnu.so"
+            binary.write_bytes(b"binary")
+            conflicting = ModuleType("gsnet")
+            conflicting.__file__ = "/tmp/unrelated/gsnet/__init__.py"
+            anygrasp_runtime.sys.modules["gsnet"] = conflicting
+
+            with (
+                mock.patch.object(
+                    anygrasp_runtime,
+                    "matching_gsnet_path",
+                    return_value=binary,
+                ),
+                self.assertRaisesRegex(RuntimeError, "already loaded"),
+            ):
+                anygrasp_runtime.load_gsnet_module(root)
 
     def test_create_detector_uses_project_license_and_working_directory(self) -> None:
         with tempfile.TemporaryDirectory() as value:
