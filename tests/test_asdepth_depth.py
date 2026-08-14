@@ -18,7 +18,9 @@ from asdepth_depth import (
     load_checkpoint,
     predict_depth,
     prepare_rgbd_input,
+    render_pointcloud_reproject,
     save_depth_visualizations,
+    stable_point_cloud_canvas_hw,
 )
 from asdepth_depth.models import DeFMRGBDDepth, DeFMStackConvRGBDDepth
 from asdepth_depth.preprocess import metric_depth_from_raw, output_size
@@ -152,6 +154,21 @@ class CheckpointTests(unittest.TestCase):
 
 
 class VisualizationTests(unittest.TestCase):
+    def test_point_cloud_reprojection_matches_stable_canvas_contract(self) -> None:
+        depth = np.linspace(1.0, 2.0, 24, dtype=np.float32).reshape(4, 6)
+        color = np.arange(72, dtype=np.uint8).reshape(4, 6, 3)
+        intrinsics = np.array(
+            [[6.0, 0.0, 2.5], [0.0, 6.0, 1.5], [0.0, 0.0, 1.0]],
+            dtype=np.float32,
+        )
+
+        first = render_pointcloud_reproject(depth, intrinsics, color)
+        second = render_pointcloud_reproject(depth, intrinsics, color)
+
+        np.testing.assert_array_equal(first, second)
+        self.assertEqual(first.shape, (*stable_point_cloud_canvas_hw(4, 6), 3))
+        self.assertEqual(first.shape, (6, 8, 3))
+
     def test_shared_range_uses_joint_valid_depth_values(self) -> None:
         raw = np.array([[0.0, 1.0], [2.0, np.nan]], dtype=np.float32)
         prediction = np.array([[1.5, 2.5], [20.0, -1.0]], dtype=np.float32)
@@ -180,22 +197,46 @@ class VisualizationTests(unittest.TestCase):
     def test_save_depth_visualizations_writes_raw_and_prediction_pngs(self) -> None:
         raw = np.array([[0, 1000], [2000, 3000]], dtype=np.uint16)
         prediction = np.array([[np.nan, 1.5], [2.5, 3.5]], dtype=np.float32)
+        color = np.array(
+            [[[0, 0, 0], [0, 0, 255]], [[0, 255, 0], [255, 0, 0]]],
+            dtype=np.uint8,
+        )
 
         with tempfile.TemporaryDirectory() as directory:
             artifacts = save_depth_visualizations(
                 directory,
                 raw,
                 prediction,
+                color_bgr=color,
+                fx=2.0,
+                fy=2.0,
+                cx=0.5,
+                cy=0.5,
                 depth_scale=1000.0,
                 max_depth_m=10.0,
             )
             raw_visualization = cv2.imread(str(artifacts.raw_depth_path), cv2.IMREAD_COLOR)
             prediction_visualization = cv2.imread(str(artifacts.prediction_path), cv2.IMREAD_COLOR)
+            raw_point_cloud = cv2.imread(
+                str(artifacts.raw_point_cloud_path), cv2.IMREAD_COLOR
+            )
+            prediction_point_cloud = cv2.imread(
+                str(artifacts.prediction_point_cloud_path), cv2.IMREAD_COLOR
+            )
 
         self.assertIsNotNone(raw_visualization)
         self.assertIsNotNone(prediction_visualization)
+        self.assertIsNotNone(raw_point_cloud)
+        self.assertIsNotNone(prediction_point_cloud)
         self.assertEqual(raw_visualization.shape, (2, 2, 3))
         self.assertEqual(prediction_visualization.shape, (2, 2, 3))
+        self.assertEqual(raw_point_cloud.shape, (2, 2, 3))
+        self.assertEqual(prediction_point_cloud.shape, (2, 2, 3))
+        self.assertEqual(artifacts.raw_point_count, 3)
+        self.assertEqual(artifacts.prediction_point_count, 3)
+        self.assertEqual(artifacts.point_cloud_view, "depth_reproject")
+        self.assertEqual(artifacts.point_cloud_rot_x_deg, 25.0)
+        self.assertEqual(artifacts.point_cloud_rot_y_deg, 15.0)
         np.testing.assert_array_equal(raw_visualization[0, 0], [0, 0, 0])
         np.testing.assert_array_equal(prediction_visualization[0, 0], [0, 0, 0])
 

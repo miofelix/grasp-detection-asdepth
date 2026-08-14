@@ -258,17 +258,24 @@ python asdepth_depth_only.py ... --device cuda
 ```text
 debug/asdepth-only/run_日期_时间/
 ├── raw_depth_vis.png
+├── raw_point_cloud_vis.png
 ├── pred_depth.npy
 ├── pred_depth_vis.png
+├── pred_point_cloud_vis.png
 └── run_metadata.json
 ```
 
 - `raw_depth_vis.png`：原始深度换算为米后的彩色可视化；
+- `raw_point_cloud_vis.png`：原始米制深度反投影得到的 RGB 三维点云视图；
 - `pred_depth.npy`：与输入图像同尺寸的 `float32` 深度数组，单位为米；
 - `pred_depth_vis.png`：预测深度的彩色可视化；
+- `pred_point_cloud_vis.png`：预测米制深度反投影得到的 RGB 三维点云视图；
 - `run_metadata.json`：模型、输入路径、设备、参数和耗时。
 
 两张深度可视化使用联合有效深度的 `2%~98%` 百分位共享色标，便于直接比较；无效深度显示为黑色。
+点云图参考 `AS-Depth-Research` 的 `render_pointcloud_reproject` 实现：在相机坐标系中反投影，围绕点云
+质心按固定 `rot_x=25°`、`rot_y=15°` 旋转后重新投影，使用 RGB 着色、2×2 splat、邻域补洞和
+30% 白色稳定画布。它是无窗口的静态 PNG，在无桌面的服务器上也会正常生成。
 
 如果 MPS 上遇到算子兼容问题，可先改用 `--device cpu` 判断是否为设备问题。
 
@@ -326,6 +333,8 @@ python asdepth_pipeline.py \
 ```
 
 服务器没有图形桌面时不要添加 `--debug`，否则 Open3D 窗口可能无法创建。
+不添加 `--debug` 仍会保存 `raw_point_cloud_vis.png` 和 `pred_point_cloud_vis.png`；`--debug` 只控制
+交互式 Open3D 窗口和 `scene_cloud_14b.ply`。
 
 ## 9. 使用 Orbbec 或 RealSense 在线检测
 
@@ -377,8 +386,10 @@ debug/asdepth/<本次运行目录>/
 ├── depth.png            # 相机模式生成的对齐原始深度
 ├── camera_metadata.json # 相机后端、序列号、深度比例和内参
 ├── raw_depth_vis.png    # 原始米制深度的彩色可视化
+├── raw_point_cloud_vis.png # 原始深度对应的静态 RGB 三维点云图
 ├── pred_depth.npy       # 深度模型输出，float32，单位米
 ├── pred_depth_vis.png   # 预测米制深度的彩色可视化
+├── pred_point_cloud_vis.png # 预测深度对应的静态 RGB 三维点云图
 ├── grasp_pose.txt       # 最佳抓取的旋转、平移和夹爪宽度
 ├── run_metadata.json    # 参数、文件路径、设备和耗时
 └── scene_cloud_14b.ply  # 仅 --debug 时可能生成
@@ -390,8 +401,9 @@ debug/asdepth/<本次运行目录>/
 - `t_cam` 是相机坐标系下的三维位置，单位为米；
 - `width` 是建议夹爪开口宽度，单位为米。
 
-建议先对比 `raw_depth_vis.png` 和 `pred_depth_vis.png`，再检查 `pred_depth.npy`、点云方向和
-`grasp_pose.txt`，确认结果合理后再考虑机械臂执行。
+建议先对比 `raw_depth_vis.png`、`pred_depth_vis.png` 以及两张点云图，再检查 `pred_depth.npy`、
+点云方向和 `grasp_pose.txt`，确认结果合理后再考虑机械臂执行。点云图的内参、画布尺寸、旋转角度和
+有效点数会记录在 `run_metadata.json.point_cloud_visualization`。
 
 ## 11. 控制 Piper 机械臂
 

@@ -14,10 +14,17 @@ from .api import (
 from .checkpoint import CheckpointLoadReport, extract_state_dict, load_checkpoint
 from .preprocess import prepare_rgbd_input
 from .visualization import (
+    POINT_CLOUD_BACKGROUND_BGR,
+    POINT_CLOUD_PAD_RATIO,
+    POINT_CLOUD_ROT_X_DEG,
+    POINT_CLOUD_ROT_Y_DEG,
+    POINT_CLOUD_VIEW,
     DepthVisualizationArtifacts,
     colorize_metric_depth,
     depth_visualization_range,
+    render_pointcloud_reproject,
     save_depth_visualizations,
+    stable_point_cloud_canvas_hw,
 )
 
 __all__ = [
@@ -25,6 +32,11 @@ __all__ = [
     "CheckpointLoadReport",
     "DepthVisualizationArtifacts",
     "LoadedDepthModel",
+    "POINT_CLOUD_BACKGROUND_BGR",
+    "POINT_CLOUD_PAD_RATIO",
+    "POINT_CLOUD_ROT_X_DEG",
+    "POINT_CLOUD_ROT_Y_DEG",
+    "POINT_CLOUD_VIEW",
     "colorize_metric_depth",
     "depth_visualization_range",
     "extract_state_dict",
@@ -32,5 +44,7 @@ __all__ = [
     "load_depth_model",
     "predict_depth",
     "prepare_rgbd_input",
+    "render_pointcloud_reproject",
     "save_depth_visualizations",
+    "stable_point_cloud_canvas_hw",
 ]

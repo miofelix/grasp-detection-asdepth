@@ -18,6 +18,15 @@ from typing import Any
 
 import numpy as np
 
+LEGACY_CAMERA_INTRINSICS = {
+    "fx": 616.22601724,
+    "fy": 615.78839082,
+    "cx": 315.33494299,
+    "cy": 251.59150012,
+    "width": 640,
+    "height": 480,
+}
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -41,6 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-depth", type=float, default=10.0, help="raw depth 有效上限，单位 meter"
     )
+    parser.add_argument("--camera-fx", type=float, help="覆盖彩色相机内参 fx")
+    parser.add_argument("--camera-fy", type=float, help="覆盖彩色相机内参 fy")
+    parser.add_argument("--camera-cx", type=float, help="覆盖彩色相机内参 cx")
+    parser.add_argument("--camera-cy", type=float, help="覆盖彩色相机内参 cy")
     parser.add_argument("--input-size", type=int, default=518)
     parser.add_argument(
         "--resize-method",
@@ -58,6 +71,15 @@ def build_parser() -> argparse.ArgumentParser:
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if args.depth_scale <= 0 or args.max_depth <= 0 or args.input_size <= 0:
         parser.error("--depth-scale, --max-depth and --input-size must be positive")
+    intrinsic_values = [args.camera_fx, args.camera_fy, args.camera_cx, args.camera_cy]
+    if any(value is not None for value in intrinsic_values) and not all(
+        value is not None for value in intrinsic_values
+    ):
+        parser.error(
+            "--camera-fx, --camera-fy, --camera-cx and --camera-cy must be provided together"
+        )
+    if args.camera_fx is not None and (args.camera_fx <= 0 or args.camera_fy <= 0):
+        parser.error("--camera-fx and --camera-fy must be positive")
 
 
 def _resolve_file(path: str | Path, *, label: str) -> Path:
@@ -124,12 +146,39 @@ def _write_metadata(path: Path, metadata: dict[str, Any]) -> None:
         json.dump(metadata, stream, ensure_ascii=False, indent=2, sort_keys=True)
 
 
+def _resolve_intrinsics(
+    args: argparse.Namespace,
+    image_shape: tuple[int, int],
+) -> dict[str, float | int]:
+    height, width = image_shape
+    if args.camera_fx is not None:
+        return {
+            "fx": float(args.camera_fx),
+            "fy": float(args.camera_fy),
+            "cx": float(args.camera_cx),
+            "cy": float(args.camera_cy),
+            "width": width,
+            "height": height,
+        }
+    scale_x = width / int(LEGACY_CAMERA_INTRINSICS["width"])
+    scale_y = height / int(LEGACY_CAMERA_INTRINSICS["height"])
+    return {
+        "fx": float(LEGACY_CAMERA_INTRINSICS["fx"]) * scale_x,
+        "fy": float(LEGACY_CAMERA_INTRINSICS["fy"]) * scale_y,
+        "cx": float(LEGACY_CAMERA_INTRINSICS["cx"]) * scale_x,
+        "cy": float(LEGACY_CAMERA_INTRINSICS["cy"]) * scale_y,
+        "width": width,
+        "height": height,
+    }
+
+
 def run(args: argparse.Namespace) -> dict[str, str]:
     depth_checkpoint = _resolve_file(args.depth_checkpoint, label="depth model checkpoint")
     rgb_path = _resolve_file(args.rgb_image, label="RGB image")
     depth_path = _resolve_file(args.depth_image, label="raw depth image")
     run_dir = _new_run_dir(args.save_dir)
     color_bgr, raw_depth = _load_rgbd_files(rgb_path, depth_path)
+    intrinsics = _resolve_intrinsics(args, color_bgr.shape[:2])
 
     from asdepth_depth import load_depth_model, predict_depth, save_depth_visualizations
 
@@ -166,6 +215,11 @@ def run(args: argparse.Namespace) -> dict[str, str]:
         run_dir,
         raw_depth,
         prediction,
+        color_bgr=color_bgr,
+        fx=float(intrinsics["fx"]),
+        fy=float(intrinsics["fy"]),
+        cx=float(intrinsics["cx"]),
+        cy=float(intrinsics["cy"]),
         depth_scale=args.depth_scale,
         max_depth_m=args.max_depth,
     )
@@ -182,8 +236,12 @@ def run(args: argparse.Namespace) -> dict[str, str]:
         "rgb_image": str(rgb_path),
         "raw_depth_image": str(depth_path),
         "raw_depth_visualization": str(visualizations.raw_depth_path),
+        "raw_point_cloud_visualization": str(visualizations.raw_point_cloud_path),
         "prediction": str(prediction_path),
         "prediction_visualization": str(visualizations.prediction_path),
+        "prediction_point_cloud_visualization": str(
+            visualizations.prediction_point_cloud_path
+        ),
         "input_shape": list(color_bgr.shape[:2]),
         "prediction_shape": list(prediction.shape),
         "prediction_dtype": str(prediction.dtype),
@@ -191,6 +249,7 @@ def run(args: argparse.Namespace) -> dict[str, str]:
         "device": resolved_device,
         "depth_scale": float(args.depth_scale),
         "max_depth_m": float(args.max_depth),
+        "camera_intrinsics": intrinsics,
         "depth_visualization": {
             "colormap": visualizations.colormap,
             "min_depth_m": visualizations.min_depth_m,
@@ -199,6 +258,18 @@ def run(args: argparse.Namespace) -> dict[str, str]:
             "percentile_max": visualizations.percentile_max,
             "invalid_color": "black",
             "shared_scale": True,
+        },
+        "point_cloud_visualization": {
+            "coordinate_frame": "camera",
+            "axis_convention": "X right, Y down, Z forward",
+            "color_source": "rgb",
+            "view": visualizations.point_cloud_view,
+            "rot_x_deg": visualizations.point_cloud_rot_x_deg,
+            "rot_y_deg": visualizations.point_cloud_rot_y_deg,
+            "image_width": visualizations.point_cloud_canvas_width,
+            "image_height": visualizations.point_cloud_canvas_height,
+            "raw_valid_points": visualizations.raw_point_count,
+            "prediction_valid_points": visualizations.prediction_point_count,
         },
         "input_size": int(args.input_size),
         "resize_method": args.resize_method,
@@ -212,7 +283,11 @@ def run(args: argparse.Namespace) -> dict[str, str]:
         "run_dir": str(run_dir),
         "prediction": str(prediction_path),
         "raw_depth_visualization": str(visualizations.raw_depth_path),
+        "raw_point_cloud_visualization": str(visualizations.raw_point_cloud_path),
         "prediction_visualization": str(visualizations.prediction_path),
+        "prediction_point_cloud_visualization": str(
+            visualizations.prediction_point_cloud_path
+        ),
         "metadata": str(metadata_path),
     }
 

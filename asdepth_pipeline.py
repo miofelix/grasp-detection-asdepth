@@ -522,6 +522,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         run_dir,
         raw_depth,
         pred_depth,
+        color_bgr=color_bgr,
+        fx=intrinsics.fx,
+        fy=intrinsics.fy,
+        cx=intrinsics.cx,
+        cy=intrinsics.cy,
         depth_scale=resolved_depth_scale,
         max_depth_m=args.max_depth,
     )
@@ -565,8 +570,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "rgb_image": str(rgb_path.resolve()),
         "raw_depth_image": str(depth_path.resolve()),
         "raw_depth_visualization": str(visualizations.raw_depth_path.resolve()),
+        "raw_point_cloud_visualization": str(
+            visualizations.raw_point_cloud_path.resolve()
+        ),
         "prediction": str(prediction_path.resolve()),
         "prediction_visualization": str(visualizations.prediction_path.resolve()),
+        "prediction_point_cloud_visualization": str(
+            visualizations.prediction_point_cloud_path.resolve()
+        ),
         "grasp_pose": str(pose_path.resolve()),
         "input_shape": list(color_bgr.shape[:2]),
         "prediction_shape": list(pred_depth.shape),
@@ -595,6 +606,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "percentile_max": visualizations.percentile_max,
             "invalid_color": "black",
             "shared_scale": True,
+        },
+        "point_cloud_visualization": {
+            "coordinate_frame": "camera",
+            "axis_convention": "X right, Y down, Z forward",
+            "color_source": "rgb",
+            "view": visualizations.point_cloud_view,
+            "rot_x_deg": visualizations.point_cloud_rot_x_deg,
+            "rot_y_deg": visualizations.point_cloud_rot_y_deg,
+            "image_width": visualizations.point_cloud_canvas_width,
+            "image_height": visualizations.point_cloud_canvas_height,
+            "raw_valid_points": visualizations.raw_point_count,
+            "prediction_valid_points": visualizations.prediction_point_count,
         },
         "input_size": int(args.input_size),
         "resize_method": args.resize_method,
@@ -693,7 +716,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "run_dir": str(run_dir),
         "prediction": str(prediction_path),
         "raw_depth_visualization": str(visualizations.raw_depth_path),
+        "raw_point_cloud_visualization": str(visualizations.raw_point_cloud_path),
         "prediction_visualization": str(visualizations.prediction_path),
+        "prediction_point_cloud_visualization": str(
+            visualizations.prediction_point_cloud_path
+        ),
         "grasp_pose": str(pose_path),
         "metadata": str(metadata_path),
         "arm_executed": metadata["arm_executed"],

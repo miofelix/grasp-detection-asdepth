@@ -146,7 +146,17 @@ class PipelineSafetyTests(unittest.TestCase):
             self.assertEqual(np.load(result["prediction"]).shape, (4, 6))
             self.assertEqual(cv2.imread(result["raw_depth_visualization"]).shape, (4, 6, 3))
             self.assertEqual(cv2.imread(result["prediction_visualization"]).shape, (4, 6, 3))
+            self.assertEqual(
+                cv2.imread(result["raw_point_cloud_visualization"]).shape,
+                (6, 8, 3),
+            )
+            self.assertEqual(
+                cv2.imread(result["prediction_point_cloud_visualization"]).shape,
+                (6, 8, 3),
+            )
             self.assertTrue(metadata["depth_visualization"]["shared_scale"])
+            self.assertEqual(metadata["point_cloud_visualization"]["coordinate_frame"], "camera")
+            self.assertEqual(metadata["point_cloud_visualization"]["prediction_valid_points"], 24)
 
     def test_execute_arm_requires_explicit_flag(self) -> None:
         with tempfile.TemporaryDirectory() as value:
