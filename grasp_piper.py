@@ -14,6 +14,9 @@ from typing import Any
 
 import numpy as np
 
+from piper_control import enable_with_timeout as _enable_piper_with_timeout
+from piper_control import request_emergency_stop
+
 DEFAULT_DEVICE_CONFIG_PATH = "config/piper_device.json"
 DEFAULT_ARM_MIN_GRASP_SCORE = 0.2
 GRIPPER_WIDTH_EPSILON_M = 1e-6
@@ -453,12 +456,7 @@ def move_with_check(
 
 
 def _enable_with_timeout(piper: Any, timeout_s: float) -> None:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if piper.EnablePiper():
-            return
-        time.sleep(0.05)
-    raise TimeoutError(f"Piper could not be enabled within {timeout_s:.1f}s")
+    _enable_piper_with_timeout(piper, timeout_s)
 
 
 def _set_gripper_with_check(
@@ -557,7 +555,7 @@ def _execute_motion_plan(plan: ArmMotionPlan, safety: ArmSafetyConfig) -> None:
         emergency_requested = False
         if piper is not None and hardware_action_started:
             with suppress(Exception):
-                piper.EmergencyStop(0x01)
+                request_emergency_stop(piper)
                 emergency_requested = True
         suffix = "emergency stop requested" if emergency_requested else "no motion command sent"
         raise RuntimeError(f"Piper execution failed ({suffix}): {exc}") from exc

@@ -409,11 +409,81 @@ debug/asdepth/<本次运行目录>/
 
 > **危险操作：`--execute-arm --confirm-arm-motion` 会连接所选机械臂的 CAN 接口并发送运动和夹爪指令。未经标定和现场确认不要使用。**
 
+### 11.1 无视觉状态与运动测试 CLI
+
+`piper_cli.py` 是独立的机械臂诊断入口，不会导入相机、深度模型、AnyGrasp、OpenCV 或 Open3D。它一次
+只连接一条 CAN，可用 `--arm-side left`/`right` 选择左臂 `can1` 或右臂 `can2`。右臂的手动控制权限与
+`camera_to_base` 标定分离，因此可以检查状态和人工点动，但在补齐标定前仍不能参与视觉抓取。
+
+只读状态命令会打开 CAN 接收反馈，但不会使能机械臂或发送运动指令：
+
+```bash
+python piper_cli.py --arm-side left status
+python piper_cli.py --arm-side left watch --hz 5
+python piper_cli.py --arm-side right --json status
+```
+
+状态输出包含控制/运动/故障状态、六关节使能和角度、末端位姿、夹爪反馈、六个电机的速度、电流、
+电压、温度、驱动故障以及各类 CAN 反馈频率。`--json` 输出单次 JSON；`watch --json` 每行输出一个
+JSON 快照，便于保存或交给其他程序处理。
+
+所有可能使能或移动硬件的命令都必须在子命令之前同时添加 `--execute-arm --confirm-arm-motion`，随后还
+会显示当前值和目标值并要求输入 `y`。机械臂不会被自动使能：
+
+```bash
+python piper_cli.py --arm-side left \
+  --execute-arm --confirm-arm-motion enable
+
+python piper_cli.py --arm-side left \
+  --execute-arm --confirm-arm-motion jog-cartesian --z-mm 10
+
+python piper_cli.py --arm-side left \
+  --execute-arm --confirm-arm-motion jog-joint --joint 6 --delta-deg 3
+
+python piper_cli.py --arm-side left \
+  --execute-arm --confirm-arm-motion gripper --width-mm 40
+```
+
+相对点动每次只允许一个轴：平移默认最多 `20 mm`，末端旋转或关节点动最多 `5°`；最终目标仍必须通过
+现有工作区、最大可达距离、Z 高度、姿态和控制器关节限位检查。关节限位反馈不可用时不会发送运动命令。
+
+一键自检会预先检查完整序列，然后依次执行 Z 轴 `10 mm` 往返、J6 `3°` 往返和夹爪 `5 mm` 往返，
+每段都做反馈闭环并回到起始值：
+
+```bash
+python piper_cli.py --arm-side left \
+  --execute-arm --confirm-arm-motion self-test
+```
+
+自动自检不包含视觉避障。执行前必须清空工作区、确认 Z 方向和腕部周围有余量，并让操作人员准备物理
+急停。任何已开始动作的超时、异常或 `Ctrl-C` 都会请求急停并停止后续序列。
+
+`stop` 是唯一不要求解锁参数或交互确认的写命令，以便尽快请求急停：
+
+```bash
+python piper_cli.py --arm-side left stop
+```
+
+需要连续操作时，可以让一个进程保持 CAN 连接。未带双确认参数时，控制台只允许状态查询和急停：
+
+```bash
+python piper_cli.py --arm-side left \
+  --execute-arm --confirm-arm-motion shell
+```
+
+交互控制台支持与外层相同的 `status`、`watch`、`enable`、`disable`、`stop`、`recover`、
+`jog-cartesian`、`jog-joint`、`gripper` 和 `self-test` 命令，并可用 `help`、`quit` 退出。
+
+手动控制开关及点动/自检上限保存在 `config/piper_device.json` 的 `manual_control_enabled` 和
+`manual_control` 字段。不要通过放宽这些限制来绕过现场碰撞、姿态或反馈问题。
+
+### 11.2 视觉抓取执行
+
 当前双臂设备配置保存在 [config/piper_device.json](config/piper_device.json)：默认选择左臂，左臂使用
-`can1`；右臂接口记录为 `can2`。由于当前项目只提供了左臂的相机到基座标定矩阵，右臂默认禁用，补齐
-右臂 `camera_to_base` 标定后才能启用。运动速度、夹爪行程、工具偏移、预抓取距离和工作区限制也统一从
-该文件读取。机械臂真实执行的最低 AnyGrasp 分数由 `motion.arm_min_grasp_score` 配置；对应命令行参数可
-临时覆盖配置文件，命令行值优先。
+`can1`；右臂接口记录为 `can2`。由于当前项目只提供了左臂的相机到基座标定矩阵，右臂的视觉抓取默认
+禁用，补齐右臂 `camera_to_base` 标定后才能启用。运动速度、夹爪行程、工具偏移、预抓取距离和工作区
+限制也统一从该文件读取。机械臂真实执行的最低 AnyGrasp 分数由 `motion.arm_min_grasp_score` 配置；对应
+命令行参数可临时覆盖配置文件，命令行值优先。
 
 启用前至少完成以下检查：
 

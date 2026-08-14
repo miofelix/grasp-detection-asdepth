@@ -5,6 +5,7 @@
   "arms": {
     "left": {
       "enabled": true,
+      "manual_control_enabled": true,
       "can_interface": "can1",
       "camera_to_base": [
         [-0.03188415, -0.64642446, 0.7623115, -0.02826907],
@@ -15,10 +16,22 @@
     },
     "right": {
       "enabled": false,
+      "manual_control_enabled": true,
       "can_interface": "can2",
       "camera_to_base": null,
       "disabled_reason": "Right-arm camera-to-base calibration has not been provided"
     }
+  },
+  "manual_control": {
+    "feedback_timeout_s": 2.0,
+    "watch_hz": 5.0,
+    "max_cartesian_step_m": 0.02,
+    "max_angular_step_deg": 5.0,
+    "max_joint_step_deg": 5.0,
+    "joint_limit_margin_deg": 2.0,
+    "self_test_z_step_m": 0.01,
+    "self_test_joint_6_step_deg": 3.0,
+    "self_test_gripper_step_m": 0.005
   },
   "motion": {
     "arm_min_grasp_score": 0.2,
