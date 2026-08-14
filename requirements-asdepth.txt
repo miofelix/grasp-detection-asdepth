@@ -1,0 +1,9 @@
+# AS-Depth-2 单模型桥接依赖。建议与 requirements.txt 在同一个 CPython 3.10 环境安装。
+numpy>=1.26
+opencv-python>=4.9
+Pillow>=10.0
+loguru>=0.7.3
+omegaconf>=2.3.0
+PyYAML>=6.0
+torch>=2.3,<2.13
+torchvision>=0.18,<0.28

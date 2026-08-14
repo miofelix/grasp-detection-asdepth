@@ -1,0 +1,329 @@
+"""RealSense RGB-D → AS-Depth-2 → AnyGrasp → 可选 Piper 的安全入口。"""
+
+from __future__ import annotations
+
+import argparse
+import gc
+import importlib.util
+import json
+import platform
+import sys
+import time
+from collections.abc import Callable, Sequence
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import numpy as np
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="使用本地 AS-Depth-2 替换旧远程单目深度服务的抓取流水线",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("--depth-checkpoint", required=True, help="AS-Depth-2 checkpoint 路径")
+    parser.add_argument(
+        "--grasp-checkpoint",
+        default="ckpts/checkpoint-rs.tar",
+        help="AnyGrasp checkpoint 路径",
+    )
+    parser.add_argument("--rgb-image", help="离线 RGB 图像；必须与 --depth-image 同时提供")
+    parser.add_argument("--depth-image", help="离线 raw depth 图像；必须与 --rgb-image 同时提供")
+    parser.add_argument("--save-dir", default="debug/asdepth", help="运行产物根目录")
+    parser.add_argument("--device", default="auto", help="AS-Depth 推理设备，例如 cuda、cuda:0、cpu")
+    parser.add_argument("--depth-scale", type=float, default=1000.0)
+    parser.add_argument("--max-depth", type=float, default=10.0, help="raw depth 有效上限，单位 meter")
+    parser.add_argument("--input-size", type=int, default=518)
+    parser.add_argument(
+        "--resize-method",
+        choices=["lower_bound", "upper_bound"],
+        default="lower_bound",
+    )
+    parser.add_argument("--max-gripper-width", type=float, default=0.1)
+    parser.add_argument("--gripper-height", type=float, default=0.03)
+    parser.add_argument(
+        "--top-down-grasp",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument("--debug", action="store_true", help="开启 AnyGrasp Open3D 可视化")
+    parser.add_argument(
+        "--execute-arm",
+        action="store_true",
+        help="显式允许调用现有 Piper 控制逻辑；默认只运行感知链路",
+    )
+    parser.add_argument(
+        "--trusted-depth-checkpoint",
+        action="store_true",
+        help="允许使用 pickle 读取受信任的旧 AS-Depth checkpoint",
+    )
+    return parser
+
+
+def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if bool(args.rgb_image) != bool(args.depth_image):
+        parser.error("--rgb-image and --depth-image must be provided together")
+    if args.depth_scale <= 0 or args.max_depth <= 0 or args.input_size <= 0:
+        parser.error("--depth-scale, --max-depth and --input-size must be positive")
+    if not 0.0 <= args.max_gripper_width <= 0.1:
+        parser.error("--max-gripper-width must be between 0 and 0.1 meter")
+    if args.gripper_height <= 0:
+        parser.error("--gripper-height must be positive")
+
+
+def _resolve_file(path: str | Path, *, label: str) -> Path:
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"{label} does not exist: {resolved}")
+    return resolved
+
+
+def _new_file_run_dir(base_dir: str | Path) -> Path:
+    root = Path(base_dir).expanduser().resolve()
+    run_dir = root / f"run_{datetime.now().astimezone().strftime('%Y%m%d_%H%M%S_%f')}"
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_dir
+
+
+def _load_rgbd_files(
+    rgb_path: str | Path,
+    depth_path: str | Path,
+) -> tuple[np.ndarray, np.ndarray]:
+    import cv2
+
+    color = cv2.imread(str(rgb_path), cv2.IMREAD_COLOR)
+    if color is None:
+        raise FileNotFoundError(f"cannot read RGB image: {rgb_path}")
+    depth = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED)
+    if depth is None:
+        raise FileNotFoundError(f"cannot read raw depth image: {depth_path}")
+    if depth.ndim == 3 and depth.shape[-1] == 1:
+        depth = depth[..., 0]
+    if depth.ndim != 2:
+        raise ValueError(f"raw depth image must be single-channel, got {depth.shape}")
+    if depth.shape != color.shape[:2]:
+        raise ValueError(f"RGB/depth spatial mismatch: rgb={color.shape[:2]}, depth={depth.shape}")
+    return (
+        np.ascontiguousarray(color, dtype=np.uint8),
+        np.ascontiguousarray(depth),
+    )
+
+
+def _matching_gsnet_path() -> Path | None:
+    if platform.system() != "Linux" or platform.machine() not in {"x86_64", "AMD64"}:
+        return None
+    tag = f"{sys.version_info.major}{sys.version_info.minor}"
+    candidate = Path(__file__).resolve().parent / "gsnet_versions" / (
+        f"gsnet.cpython-{tag}-x86_64-linux-gnu.so"
+    )
+    return candidate if candidate.is_file() else None
+
+
+def _preload_matching_gsnet() -> None:
+    """优先加载与当前 CPython 匹配的 SDK 二进制，避免误用根目录旧 ``gsnet.so``。"""
+
+    if "gsnet" in sys.modules:
+        return
+    if platform.system() != "Linux" or platform.machine() not in {"x86_64", "AMD64"}:
+        raise RuntimeError("AnyGrasp GSNet in this repository requires Linux x86-64")
+    candidate = _matching_gsnet_path()
+    if candidate is None:
+        raise RuntimeError(
+            "no matching GSNet binary for this Python; use CPython 3.10 with "
+            "gsnet_versions/gsnet.cpython-310-x86_64-linux-gnu.so"
+        )
+    spec = importlib.util.spec_from_file_location("gsnet", candidate)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot create import spec for GSNet binary: {candidate}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["gsnet"] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop("gsnet", None)
+        raise
+
+
+def _load_anygrasp_functions() -> tuple[Callable[[str], str], Callable[..., Any]]:
+    _preload_matching_gsnet()
+    from get_pose import capture_one_frame, run_anygrasp
+
+    return capture_one_frame, run_anygrasp
+
+
+def _load_arm_runner() -> Callable[[np.ndarray, np.ndarray, float], Any]:
+    from grasp_piper import run_pipline
+
+    return run_pipline
+
+
+def _clear_model_cache() -> None:
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        return
+
+
+def _write_grasp_pose(
+    path: Path,
+    rotation: np.ndarray,
+    translation: np.ndarray,
+    width: float,
+) -> None:
+    with path.open("w", encoding="utf-8") as stream:
+        stream.write("R_cam:\n")
+        stream.write(np.array2string(rotation, precision=6, suppress_small=True))
+        stream.write("\n\nt_cam:\n")
+        stream.write(np.array2string(translation.reshape(-1), precision=6, suppress_small=True))
+        stream.write(f"\n\nwidth: {width}\n")
+
+
+def _write_metadata(path: Path, metadata: dict[str, Any]) -> None:
+    with path.open("w", encoding="utf-8") as stream:
+        json.dump(metadata, stream, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _grasp_config(args: argparse.Namespace, checkpoint: Path) -> SimpleNamespace:
+    return SimpleNamespace(
+        checkpoint_path=str(checkpoint),
+        max_gripper_width=float(args.max_gripper_width),
+        gripper_height=float(args.gripper_height),
+        top_down_grasp=bool(args.top_down_grasp),
+        debug=bool(args.debug),
+        save_dir=str(args.save_dir),
+    )
+
+
+def run(args: argparse.Namespace) -> dict[str, Any]:
+    depth_checkpoint = _resolve_file(args.depth_checkpoint, label="AS-Depth checkpoint")
+    grasp_checkpoint = _resolve_file(args.grasp_checkpoint, label="AnyGrasp checkpoint")
+    capture_one_frame, run_anygrasp = _load_anygrasp_functions()
+
+    if args.rgb_image:
+        rgb_path = _resolve_file(args.rgb_image, label="RGB image")
+        depth_path = _resolve_file(args.depth_image, label="raw depth image")
+        run_dir = _new_file_run_dir(args.save_dir)
+    else:
+        run_dir = Path(capture_one_frame(args.save_dir)).expanduser().resolve()
+        rgb_path = run_dir / "color.png"
+        depth_path = run_dir / "depth.png"
+    color_bgr, raw_depth = _load_rgbd_files(rgb_path, depth_path)
+
+    from asdepth_depth import load_depth_model, predict_depth
+
+    load_started = time.perf_counter()
+    loaded = load_depth_model(
+        depth_checkpoint,
+        device=args.device,
+        trusted_pickle=args.trusted_depth_checkpoint,
+    )
+    load_ms = (time.perf_counter() - load_started) * 1000.0
+    depth_started = time.perf_counter()
+    pred_depth = predict_depth(
+        loaded,
+        color_bgr,
+        raw_depth,
+        depth_scale=args.depth_scale,
+        max_depth_m=args.max_depth,
+        input_size=args.input_size,
+        resize_method=args.resize_method,
+    )
+    depth_ms = (time.perf_counter() - depth_started) * 1000.0
+    checkpoint_report = loaded.checkpoint
+    resolved_device = str(loaded.device)
+    del loaded
+    _clear_model_cache()
+
+    prediction_path = run_dir / "pred_depth.npy"
+    np.save(prediction_path, pred_depth)
+
+    grasp_started = time.perf_counter()
+    grasp = run_anygrasp(
+        str(run_dir),
+        _grasp_config(args, grasp_checkpoint),
+        rgb=color_bgr,
+        depth=pred_depth,
+    )
+    grasp_ms = (time.perf_counter() - grasp_started) * 1000.0
+    if grasp is None or len(grasp) != 3:
+        raise RuntimeError("AnyGrasp did not return a valid grasp pose")
+    rotation = np.asarray(grasp[0], dtype=np.float64)
+    translation = np.asarray(grasp[1], dtype=np.float64).reshape(-1)
+    width = float(grasp[2])
+    if rotation.shape != (3, 3) or translation.shape != (3,):
+        raise ValueError(
+            f"invalid AnyGrasp pose shapes: rotation={rotation.shape}, translation={translation.shape}"
+        )
+    pose_path = run_dir / "grasp_pose.txt"
+    _write_grasp_pose(pose_path, rotation, translation, width)
+
+    metadata: dict[str, Any] = {
+        "schema_version": "1.0.0",
+        "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "model_id": "defm_stackconv_depth",
+        "depth_checkpoint": str(depth_checkpoint),
+        "depth_checkpoint_source_key": checkpoint_report.source_key,
+        "depth_checkpoint_tensor_count": checkpoint_report.tensor_count,
+        "depth_checkpoint_stripped_prefixes": list(checkpoint_report.stripped_prefixes),
+        "grasp_checkpoint": str(grasp_checkpoint),
+        "rgb_image": str(rgb_path.resolve()),
+        "raw_depth_image": str(depth_path.resolve()),
+        "prediction": str(prediction_path.resolve()),
+        "grasp_pose": str(pose_path.resolve()),
+        "input_shape": list(color_bgr.shape[:2]),
+        "prediction_shape": list(pred_depth.shape),
+        "prediction_dtype": str(pred_depth.dtype),
+        "prediction_unit": "meter",
+        "device": resolved_device,
+        "depth_scale": float(args.depth_scale),
+        "max_depth_m": float(args.max_depth),
+        "input_size": int(args.input_size),
+        "resize_method": args.resize_method,
+        "execute_arm_requested": bool(args.execute_arm),
+        "arm_executed": False,
+        "timings_ms": {
+            "depth_model_load": load_ms,
+            "depth_inference": depth_ms,
+            "anygrasp": grasp_ms,
+        },
+    }
+    metadata_path = run_dir / "run_metadata.json"
+    _write_metadata(metadata_path, metadata)
+
+    if args.execute_arm:
+        arm_started = time.perf_counter()
+        _load_arm_runner()(rotation, translation, width)
+        metadata["arm_executed"] = True
+        metadata["timings_ms"]["arm"] = (time.perf_counter() - arm_started) * 1000.0
+        _write_metadata(metadata_path, metadata)
+
+    return {
+        "run_dir": str(run_dir),
+        "prediction": str(prediction_path),
+        "grasp_pose": str(pose_path),
+        "metadata": str(metadata_path),
+        "arm_executed": metadata["arm_executed"],
+    }
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    _validate_args(parser, args)
+    try:
+        result = run(args)
+    except (FileNotFoundError, ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        print(f"asdepth_pipeline: error: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

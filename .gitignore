@@ -4,6 +4,7 @@ ckpts/
 ckpts/*
 
 logs/
+debug/
 
 __pycache__/
 *.pyc
