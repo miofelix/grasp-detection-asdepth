@@ -22,7 +22,7 @@
   },
   "motion": {
     "motion_speed_percent": 10,
-    "gripper_max_width_m": 0.07,
+    "gripper_max_width_m": 0.095,
     "tool_offset_m": 0.07,
     "pregrasp_clearance_m": 0.15,
     "lift_distance_m": 0.1,

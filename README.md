@@ -416,7 +416,8 @@ python asdepth_pipeline.py \
 ```
 
 `--arm-dry-run` 仍会检查夹爪行程、目标 Z 和最大可达距离。如果现场使用 100 mm 大夹爪，需要明确添加
-`--arm-gripper-max-width 0.1`；不要为了让检查通过而随意放宽可达距离或工作区。
+当前设备配置的夹爪最大行程是 `0.095 m`；不要为了让检查通过而设置超过物理行程的值，也不要随意放宽
+可达距离或工作区。
 
 默认使用左臂，无需额外指定。也可以显式传入 `--arm-side left`。`--arm-can-interface` 只用于临时覆盖
 配置文件，例如 `--arm-can-interface can2`；正常部署应直接维护配置文件，避免命令行和设备配置不一致。
@@ -458,7 +459,7 @@ python asdepth_pipeline.py \
 | `--max-depth` | `10` | 深度有效上限，单位米 |
 | `--input-size` | `518` | 深度模型预处理目标尺寸 |
 | `--resize-method` | `lower_bound` | 预处理缩放方式 |
-| `--max-gripper-width` | `0.1` | AnyGrasp 接受的最大夹爪宽度，单位米 |
+| `--max-gripper-width` | `0.095` | AnyGrasp 接受的最大夹爪宽度，单位米，与当前夹爪物理行程一致 |
 | `--gripper-height` | `0.03` | 夹爪高度，单位米 |
 | `--top-down-grasp` | 开启 | 优先输出俯视抓取；可用 `--no-top-down-grasp` 关闭 |
 | `--debug` | 关闭 | 打开 Open3D 可视化并保存调试点云 |

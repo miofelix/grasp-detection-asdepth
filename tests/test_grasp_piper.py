@@ -71,6 +71,7 @@ class PiperSafetyTests(unittest.TestCase):
 
         self.assertEqual(camera_to_base.shape, (4, 4))
         self.assertEqual(safety.can_name, "can2")
+        self.assertEqual(safety.gripper_max_width_m, 0.095)
         self.assertEqual(device["arm_side"], "left")
         self.assertEqual(device["can_interface"], "can2")
         self.assertEqual(
@@ -114,6 +115,23 @@ class PiperSafetyTests(unittest.TestCase):
                 OBSERVED_TRANSLATION,
                 0.10,
             )
+
+    def test_float32_noise_at_gripper_limit_is_clamped(self) -> None:
+        safety = grasp_piper.ArmSafetyConfig(
+            gripper_max_width_m=0.095,
+            pregrasp_clearance_m=0.10,
+            max_reach_m=0.70,
+            max_z_m=0.70,
+        )
+
+        plan = grasp_piper.build_motion_plan(
+            OBSERVED_ROTATION,
+            OBSERVED_TRANSLATION,
+            0.0950000005,
+            safety=safety,
+        )
+
+        self.assertEqual(plan.gripper_grasp_width_m, 0.095)
 
     def test_pregrasp_outside_reach_is_rejected_before_hardware(self) -> None:
         safety = grasp_piper.ArmSafetyConfig(gripper_max_width_m=0.10)

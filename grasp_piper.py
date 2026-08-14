@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 
 DEFAULT_DEVICE_CONFIG_PATH = "config/piper_device.json"
+GRIPPER_WIDTH_EPSILON_M = 1e-6
 DEFAULT_T_CAM_TO_BASE = np.array(
     [
         [-0.03188415, -0.64642446, 0.7623115, -0.02826907],
@@ -50,7 +51,7 @@ class ArmPose:
 class ArmSafetyConfig:
     can_name: str = "can2"
     motion_speed_percent: int = 10
-    gripper_max_width_m: float = 0.07
+    gripper_max_width_m: float = 0.095
     tool_offset_m: float = 0.07
     pregrasp_clearance_m: float = 0.15
     lift_distance_m: float = 0.10
@@ -249,6 +250,15 @@ def _pose_from_transform(transform: np.ndarray, angles_deg: tuple[float, float, 
     )
 
 
+def _normalize_gripper_width(width_m: float, maximum_m: float) -> float:
+    if width_m > maximum_m + GRIPPER_WIDTH_EPSILON_M:
+        raise ValueError(
+            "AnyGrasp width exceeds the configured Piper gripper limit: "
+            f"{width_m:.4f}m > {maximum_m:.4f}m"
+        )
+    return min(width_m, maximum_m)
+
+
 def build_motion_plan(
     rotation_camera: np.ndarray,
     translation_camera: np.ndarray,
@@ -270,6 +280,9 @@ def build_motion_plan(
         raise ValueError(f"invalid AnyGrasp translation: shape={translation.shape}")
     if not math.isfinite(grasp_width_m) or grasp_width_m <= 0:
         raise ValueError(f"invalid AnyGrasp gripper width: {grasp_width_m}")
+    command_gripper_width_m = _normalize_gripper_width(
+        float(grasp_width_m), config.gripper_max_width_m
+    )
 
     camera_to_object = np.eye(4, dtype=np.float64)
     camera_to_object[:3, :3] = rotation
@@ -310,18 +323,14 @@ def build_motion_plan(
         grasp_pose=_pose_from_transform(base_to_grasp, command_angles),
         lift_pose=_pose_from_transform(base_to_lift, command_angles),
         gripper_open_width_m=config.gripper_max_width_m,
-        gripper_grasp_width_m=float(grasp_width_m),
+        gripper_grasp_width_m=command_gripper_width_m,
     )
     validate_motion_plan(plan, config)
     return plan
 
 
 def validate_motion_plan(plan: ArmMotionPlan, safety: ArmSafetyConfig) -> None:
-    if plan.gripper_grasp_width_m > safety.gripper_max_width_m:
-        raise ValueError(
-            "AnyGrasp width exceeds the configured Piper gripper limit: "
-            f"{plan.gripper_grasp_width_m:.4f}m > {safety.gripper_max_width_m:.4f}m"
-        )
+    _normalize_gripper_width(plan.gripper_grasp_width_m, safety.gripper_max_width_m)
 
     for name, pose in (
         ("ready", plan.ready_pose),
@@ -573,7 +582,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="ckpts/checkpoint_detection.tar",
         help="AnyGrasp 2026 detection checkpoint path",
     )
-    parser.add_argument("--max_gripper_width", type=float, default=0.1)
+    parser.add_argument("--max_gripper_width", type=float, default=0.095)
     parser.add_argument("--gripper_height", type=float, default=0.03)
     parser.add_argument("--top_down_grasp", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--debug", action="store_true")
@@ -601,7 +610,7 @@ def main() -> int:
     from camera_capture import capture_one_frame
     from get_pose import run_anygrasp
 
-    args.max_gripper_width = max(0.0, min(0.1, args.max_gripper_width))
+    args.max_gripper_width = max(0.0, min(0.095, args.max_gripper_width))
     capture = capture_one_frame(args.save_dir, backend=args.camera_backend)
     args.depth_scale = capture.raw_units_per_meter
     args.camera_intrinsics = {

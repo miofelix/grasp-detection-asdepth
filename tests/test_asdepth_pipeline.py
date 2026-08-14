@@ -82,6 +82,7 @@ class PipelineSafetyTests(unittest.TestCase):
 
         self.assertEqual(args.camera_backend, "orbbec")
         self.assertEqual(args.grasp_checkpoint, "ckpts/checkpoint_detection.tar")
+        self.assertEqual(args.max_gripper_width, 0.095)
         self.assertFalse(args.execute_arm)
         self.assertFalse(args.arm_dry_run)
 

@@ -80,7 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["lower_bound", "upper_bound"],
         default="lower_bound",
     )
-    parser.add_argument("--max-gripper-width", type=float, default=0.1)
+    parser.add_argument("--max-gripper-width", type=float, default=0.095)
     parser.add_argument("--gripper-height", type=float, default=0.03)
     parser.add_argument(
         "--top-down-grasp",
