@@ -134,8 +134,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--arm-min-grasp-score",
         type=float,
-        default=0.2,
-        help="允许机械臂真实执行的最低 AnyGrasp 分数",
+        default=None,
+        help="临时覆盖允许机械臂真实执行的最低 AnyGrasp 分数；默认读取 arm config",
     )
     parser.add_argument("--arm-tool-offset", type=float, default=None, help="临时覆盖工具偏移")
     parser.add_argument(
@@ -150,6 +150,39 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--arm-max-reach", type=float, default=None, help="临时覆盖最大可达距离")
     parser.add_argument("--arm-min-z", type=float, default=None, help="临时覆盖目标最低基座 Z")
     parser.add_argument("--arm-max-z", type=float, default=None, help="临时覆盖目标最高基座 Z")
+    parser.add_argument(
+        "--arm-max-abs-x",
+        type=float,
+        default=None,
+        help="临时覆盖基座坐标系 X 轴绝对值上限，单位米",
+    )
+    parser.add_argument(
+        "--arm-max-abs-y",
+        type=float,
+        default=None,
+        help="临时覆盖基座坐标系 Y 轴绝对值上限，单位米",
+    )
+    parser.add_argument("--arm-enable-timeout", type=float, default=None, help="临时覆盖使能超时，单位秒")
+    parser.add_argument("--arm-move-timeout", type=float, default=None, help="临时覆盖单次移动超时，单位秒")
+    parser.add_argument("--arm-gripper-timeout", type=float, default=None, help="临时覆盖夹爪动作超时，单位秒")
+    parser.add_argument(
+        "--arm-position-tolerance",
+        type=float,
+        default=None,
+        help="临时覆盖移动到位位置容差，单位米",
+    )
+    parser.add_argument(
+        "--arm-angle-tolerance",
+        type=float,
+        default=None,
+        help="临时覆盖移动到位角度容差，单位度",
+    )
+    parser.add_argument(
+        "--arm-gripper-tolerance",
+        type=float,
+        default=None,
+        help="临时覆盖夹爪到位容差，单位米",
+    )
     parser.add_argument(
         "--trusted-depth-checkpoint",
         action="store_true",
@@ -194,7 +227,7 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--arm-speed-percent must be between 1 and 100")
     if args.arm_gripper_max_width is not None and not 0 < args.arm_gripper_max_width <= 0.1:
         parser.error("--arm-gripper-max-width must be in (0, 0.1] meter")
-    if not 0 <= args.arm_min_grasp_score <= 1:
+    if args.arm_min_grasp_score is not None and not 0 <= args.arm_min_grasp_score <= 1:
         parser.error("--arm-min-grasp-score must be between 0 and 1")
     distances = (
         args.arm_tool_offset,
@@ -207,12 +240,31 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--arm-max-reach must be positive")
     if args.arm_min_z is not None and args.arm_min_z < 0:
         parser.error("--arm-min-z must be non-negative")
+    if args.arm_max_z is not None and args.arm_max_z <= 0:
+        parser.error("--arm-max-z must be positive")
     if (
         args.arm_min_z is not None
         and args.arm_max_z is not None
         and args.arm_min_z >= args.arm_max_z
     ):
         parser.error("Piper arm Z range is invalid")
+    workspace_limits = (args.arm_max_abs_x, args.arm_max_abs_y)
+    if any(value is not None and value <= 0 for value in workspace_limits):
+        parser.error("--arm-max-abs-x and --arm-max-abs-y must be positive")
+    timeouts = (
+        args.arm_enable_timeout,
+        args.arm_move_timeout,
+        args.arm_gripper_timeout,
+    )
+    if any(value is not None and value <= 0 for value in timeouts):
+        parser.error("arm operation timeouts must be positive")
+    tolerances = (
+        args.arm_position_tolerance,
+        args.arm_angle_tolerance,
+        args.arm_gripper_tolerance,
+    )
+    if any(value is not None and value <= 0 for value in tolerances):
+        parser.error("arm position, angle and gripper tolerances must be positive")
 
 
 def _resolve_file(path: str | Path, *, label: str) -> Path:
@@ -283,6 +335,15 @@ def _load_arm_runner() -> Callable[..., Any]:
     return run_pipeline
 
 
+def _resolve_arm_min_grasp_score(args: argparse.Namespace) -> tuple[float, str]:
+    from grasp_piper import resolve_arm_min_grasp_score
+
+    return resolve_arm_min_grasp_score(
+        args.arm_config,
+        override=args.arm_min_grasp_score,
+    )
+
+
 def _arm_runner_kwargs(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "device_config_path": args.arm_config,
@@ -296,6 +357,14 @@ def _arm_runner_kwargs(args: argparse.Namespace) -> dict[str, Any]:
         "max_reach_m": args.arm_max_reach,
         "min_z_m": args.arm_min_z,
         "max_z_m": args.arm_max_z,
+        "max_abs_x_m": args.arm_max_abs_x,
+        "max_abs_y_m": args.arm_max_abs_y,
+        "enable_timeout_s": args.arm_enable_timeout,
+        "move_timeout_s": args.arm_move_timeout,
+        "gripper_timeout_s": args.arm_gripper_timeout,
+        "position_tolerance_m": args.arm_position_tolerance,
+        "angle_tolerance_deg": args.arm_angle_tolerance,
+        "gripper_tolerance_m": args.arm_gripper_tolerance,
     }
 
 
@@ -385,6 +454,16 @@ def _resolve_intrinsics(
 def run(args: argparse.Namespace) -> dict[str, Any]:
     depth_checkpoint = _resolve_file(args.depth_checkpoint, label="depth model checkpoint")
     grasp_checkpoint = _resolve_file(args.grasp_checkpoint, label="AnyGrasp checkpoint")
+    arm_requested = bool(args.execute_arm or args.arm_dry_run)
+    if arm_requested:
+        arm_min_grasp_score, arm_min_grasp_score_source = _resolve_arm_min_grasp_score(args)
+    else:
+        arm_min_grasp_score = (
+            float(args.arm_min_grasp_score) if args.arm_min_grasp_score is not None else None
+        )
+        arm_min_grasp_score_source = (
+            "command_line" if args.arm_min_grasp_score is not None else None
+        )
 
     capture: CaptureResult | None = None
     if args.rgb_image:
@@ -521,9 +600,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "resize_method": args.resize_method,
         "execute_arm_requested": bool(args.execute_arm),
         "arm_dry_run_requested": bool(args.arm_dry_run),
-        "arm_min_grasp_score": float(args.arm_min_grasp_score),
+        "arm_min_grasp_score": arm_min_grasp_score,
+        "arm_min_grasp_score_source": arm_min_grasp_score_source,
         "arm_score_gate_passed": (
-            grasp_score is not None and grasp_score >= args.arm_min_grasp_score
+            grasp_score is not None
+            and arm_min_grasp_score is not None
+            and grasp_score >= arm_min_grasp_score
         ),
         "arm_executed": False,
         "arm_execution_state": "not_requested",
@@ -537,18 +619,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     metadata_path = run_dir / "run_metadata.json"
     _write_metadata(metadata_path, metadata)
 
-    arm_requested = bool(args.execute_arm or args.arm_dry_run)
     if arm_requested:
         if args.execute_arm and grasp_score is None:
             metadata["arm_execution_state"] = "rejected"
             metadata["arm_error"] = "AnyGrasp did not expose a score for safety validation"
             _write_metadata(metadata_path, metadata)
             raise RuntimeError(metadata["arm_error"])
-        if args.execute_arm and grasp_score < args.arm_min_grasp_score:
+        if args.execute_arm and grasp_score < arm_min_grasp_score:
             metadata["arm_execution_state"] = "rejected"
             metadata["arm_error"] = (
                 f"AnyGrasp score {grasp_score:.6f} is below the arm threshold "
-                f"{args.arm_min_grasp_score:.6f}"
+                f"{arm_min_grasp_score:.6f}"
             )
             _write_metadata(metadata_path, metadata)
             raise RuntimeError(metadata["arm_error"])

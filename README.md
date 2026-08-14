@@ -398,15 +398,16 @@ debug/asdepth/<本次运行目录>/
 > **危险操作：`--execute-arm --confirm-arm-motion` 会连接所选机械臂的 CAN 接口并发送运动和夹爪指令。未经标定和现场确认不要使用。**
 
 当前双臂设备配置保存在 [config/piper_device.json](config/piper_device.json)：默认选择左臂，左臂使用
-`can2`；右臂接口记录为 `can1`。由于当前项目只提供了左臂的相机到基座标定矩阵，右臂默认禁用，补齐
+`can1`；右臂接口记录为 `can2`。由于当前项目只提供了左臂的相机到基座标定矩阵，右臂默认禁用，补齐
 右臂 `camera_to_base` 标定后才能启用。运动速度、夹爪行程、工具偏移、预抓取距离和工作区限制也统一从
-该文件读取。
+该文件读取。机械臂真实执行的最低 AnyGrasp 分数由 `motion.arm_min_grasp_score` 配置；对应命令行参数可
+临时覆盖配置文件，命令行值优先。
 
 启用前至少完成以下检查：
 
 1. 检查 [config/piper_device.json](config/piper_device.json) 中所选机械臂的 `camera_to_base` 是否为当前安装的现场标定值；
 2. 检查 `--arm-tool-offset`、`--arm-pregrasp-clearance`、固定 ready pose 和姿态轴映射；
-3. 用 `ip -details link show can2` 确认左臂 CAN 接口存在且状态为 `UP`；
+3. 用 `ip -details link show can1` 确认左臂 CAN 接口存在且状态为 `UP`；
 4. 确认现场夹爪是 70 mm 还是 100 mm，并正确设置 `--arm-gripper-max-width`；
 5. 检查工作区、机械臂可达范围、速度、碰撞风险和物理急停；
 6. 先用 `--arm-dry-run` 反复验证 ready、pregrasp、grasp 和 lift 四个位姿；
@@ -429,7 +430,18 @@ python asdepth_pipeline.py \
 可达距离或工作区。
 
 默认使用左臂，无需额外指定。也可以显式传入 `--arm-side left`。`--arm-can-interface` 只用于临时覆盖
-配置文件，例如 `--arm-can-interface can2`；正常部署应直接维护配置文件，避免命令行和设备配置不一致。
+配置文件，例如 `--arm-can-interface can1`；正常部署应直接维护配置文件，避免命令行和设备配置不一致。
+
+例如，临时把单次移动超时提高到 20 秒并把最低抓取分数提高到 0.35：
+
+```bash
+python asdepth_pipeline.py \
+  --depth-checkpoint ckpts/depth_model.ckpt \
+  --depth-model defm_vit_l14_depth \
+  --arm-dry-run \
+  --arm-move-timeout 20 \
+  --arm-min-grasp-score 0.35
+```
 
 控制链路会先生成同一份 dry-run 计划，确认通过后才打开 CAN。到位反馈使用 Piper SDK 的
 `X_axis/Y_axis/Z_axis/RX_axis/RY_axis/RZ_axis` 字段；使能、移动和夹爪均有超时，任何步骤失败都会中止，
@@ -476,15 +488,22 @@ python asdepth_pipeline.py \
 | `--execute-arm` | 关闭 | 真实执行 Piper 控制，必须同时添加 `--confirm-arm-motion` |
 | `--arm-config` | `config/piper_device.json` | 双臂、CAN、手眼标定和安全参数配置文件 |
 | `--arm-side` | 配置文件的 `active_arm` | 选择 `left` 或 `right`；当前默认左臂 |
-| `--arm-can-interface` | 所选机械臂的配置值 | 临时覆盖 SocketCAN 接口；当前左臂 `can2`、右臂 `can1` |
+| `--arm-can-interface` | 所选机械臂的配置值 | 临时覆盖 SocketCAN 接口；当前左臂 `can1`、右臂 `can2` |
 | `--arm-gripper-max-width` | 配置文件 | 临时覆盖现场夹爪最大行程，单位米 |
-| `--arm-min-grasp-score` | `0.2` | 真实执行允许的最低 AnyGrasp 分数 |
+| `--arm-min-grasp-score` | 配置文件（当前 `0.2`） | 临时覆盖真实执行允许的最低 AnyGrasp 分数 |
 | `--arm-speed-percent` | 配置文件 | 临时覆盖 Piper 运动速度百分比 |
 | `--arm-tool-offset` | 配置文件 | 临时覆盖抓取点到腕部工具偏移，单位米 |
 | `--arm-pregrasp-clearance` | 配置文件 | 临时覆盖预抓取点后退距离，单位米 |
 | `--arm-lift-distance` | 配置文件 | 临时覆盖抓取后抬升距离，单位米 |
 | `--arm-max-reach` | 配置文件 | 临时覆盖基座原点到运动目标的最大允许距离 |
 | `--arm-min-z/--arm-max-z` | 配置文件 | 临时覆盖机械臂目标的基座 Z 安全范围 |
+| `--arm-max-abs-x/--arm-max-abs-y` | 配置文件 | 临时覆盖基座坐标系 X/Y 绝对值工作区上限，单位米 |
+| `--arm-enable-timeout` | 配置文件 | 临时覆盖机械臂使能超时，单位秒 |
+| `--arm-move-timeout` | 配置文件 | 临时覆盖单次移动超时，单位秒 |
+| `--arm-gripper-timeout` | 配置文件 | 临时覆盖夹爪动作超时，单位秒 |
+| `--arm-position-tolerance` | 配置文件 | 临时覆盖移动到位位置容差，单位米 |
+| `--arm-angle-tolerance` | 配置文件 | 临时覆盖移动到位角度容差，单位度 |
+| `--arm-gripper-tolerance` | 配置文件 | 临时覆盖夹爪到位容差，单位米 |
 | `--trusted-depth-checkpoint` | 关闭 | 允许读取可信来源的旧式 pickle checkpoint |
 
 查看脚本支持的全部参数：

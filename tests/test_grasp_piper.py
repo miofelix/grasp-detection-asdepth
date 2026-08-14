@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -66,18 +68,21 @@ class FakeGripperPiper:
 
 
 class PiperSafetyTests(unittest.TestCase):
-    def test_device_config_defaults_to_left_arm_can2(self) -> None:
+    def test_device_config_defaults_to_left_arm_can1(self) -> None:
         camera_to_base, safety, device = grasp_piper.load_device_config()
 
         self.assertEqual(camera_to_base.shape, (4, 4))
-        self.assertEqual(safety.can_name, "can2")
+        self.assertEqual(safety.can_name, "can1")
         self.assertEqual(safety.gripper_max_width_m, 0.095)
         self.assertEqual(device["arm_side"], "left")
-        self.assertEqual(device["can_interface"], "can2")
+        self.assertEqual(device["can_interface"], "can1")
         self.assertEqual(
             Path(device["config_path"]),
             Path(grasp_piper.__file__).resolve().parent / "config/piper_device.json",
         )
+
+        config = json.loads(Path(device["config_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(config["arms"]["right"]["can_interface"], "can2")
 
     def test_right_arm_is_declared_but_rejected_until_calibrated(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "right.*disabled"):
@@ -88,6 +93,50 @@ class PiperSafetyTests(unittest.TestCase):
 
         self.assertEqual(safety.can_name, "can9")
         self.assertEqual(device["can_interface"], "can9")
+
+    def test_arm_threshold_uses_config_and_cli_override(self) -> None:
+        score, source = grasp_piper.resolve_arm_min_grasp_score()
+        overridden, override_source = grasp_piper.resolve_arm_min_grasp_score(
+            "/config/does/not/exist.json",
+            override=0.65,
+        )
+
+        self.assertEqual(score, 0.2)
+        self.assertIn("#motion.arm_min_grasp_score", source)
+        self.assertEqual(overridden, 0.65)
+        self.assertEqual(override_source, "command_line")
+
+    def test_additional_safety_settings_can_override_config(self) -> None:
+        _, safety, _ = grasp_piper.load_device_config(
+            max_abs_x_m=0.41,
+            max_abs_y_m=0.42,
+            enable_timeout_s=6.0,
+            move_timeout_s=20.0,
+            gripper_timeout_s=9.0,
+            position_tolerance_m=0.006,
+            angle_tolerance_deg=4.0,
+            gripper_tolerance_m=0.002,
+        )
+
+        self.assertEqual(safety.max_abs_x_m, 0.41)
+        self.assertEqual(safety.max_abs_y_m, 0.42)
+        self.assertEqual(safety.enable_timeout_s, 6.0)
+        self.assertEqual(safety.move_timeout_s, 20.0)
+        self.assertEqual(safety.gripper_timeout_s, 9.0)
+        self.assertEqual(safety.position_tolerance_m, 0.006)
+        self.assertEqual(safety.angle_tolerance_deg, 4.0)
+        self.assertEqual(safety.gripper_tolerance_m, 0.002)
+
+    def test_invalid_configured_arm_threshold_is_rejected(self) -> None:
+        config_path = Path(grasp_piper.__file__).resolve().parent / "config/piper_device.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["motion"]["arm_min_grasp_score"] = 1.1
+        with tempfile.TemporaryDirectory() as value:
+            invalid_path = Path(value) / "piper.json"
+            invalid_path.write_text(json.dumps(config), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "between 0 and 1"):
+                grasp_piper.resolve_arm_min_grasp_score(invalid_path)
 
     def test_observed_pose_normalizes_final_mount_angle(self) -> None:
         safety = grasp_piper.ArmSafetyConfig(
@@ -201,7 +250,7 @@ class PiperSafetyTests(unittest.TestCase):
         self.assertFalse(result["executed"])
         self.assertAlmostEqual(result["plan"]["gripper_grasp_width_m"], 0.10)
         self.assertEqual(result["device"]["arm_side"], "left")
-        self.assertEqual(result["device"]["can_interface"], "can2")
+        self.assertEqual(result["device"]["can_interface"], "can1")
 
 
 if __name__ == "__main__":

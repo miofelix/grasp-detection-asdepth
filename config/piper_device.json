@@ -5,7 +5,7 @@
   "arms": {
     "left": {
       "enabled": true,
-      "can_interface": "can2",
+      "can_interface": "can1",
       "camera_to_base": [
         [-0.03188415, -0.64642446, 0.7623115, -0.02826907],
         [-0.99742629, -0.02842686, -0.06582336, -0.2205848],
@@ -15,12 +15,13 @@
     },
     "right": {
       "enabled": false,
-      "can_interface": "can1",
+      "can_interface": "can2",
       "camera_to_base": null,
       "disabled_reason": "Right-arm camera-to-base calibration has not been provided"
     }
   },
   "motion": {
+    "arm_min_grasp_score": 0.2,
     "motion_speed_percent": 10,
     "gripper_max_width_m": 0.095,
     "tool_offset_m": 0.07,

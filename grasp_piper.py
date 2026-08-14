@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 
 DEFAULT_DEVICE_CONFIG_PATH = "config/piper_device.json"
+DEFAULT_ARM_MIN_GRASP_SCORE = 0.2
 GRIPPER_WIDTH_EPSILON_M = 1e-6
 DEFAULT_T_CAM_TO_BASE = np.array(
     [
@@ -49,7 +50,7 @@ class ArmPose:
 
 @dataclass(frozen=True)
 class ArmSafetyConfig:
-    can_name: str = "can2"
+    can_name: str = "can1"
     motion_speed_percent: int = 10
     gripper_max_width_m: float = 0.095
     tool_offset_m: float = 0.07
@@ -84,6 +85,12 @@ class ArmSafetyConfig:
             raise ValueError("Piper X/Y safety limits must be positive")
         if min(self.enable_timeout_s, self.move_timeout_s, self.gripper_timeout_s) <= 0:
             raise ValueError("Piper operation timeouts must be positive")
+        if min(
+            self.position_tolerance_m,
+            self.angle_tolerance_deg,
+            self.gripper_tolerance_m,
+        ) <= 0:
+            raise ValueError("Piper position, angle and gripper tolerances must be positive")
 
 
 @dataclass(frozen=True)
@@ -110,6 +117,45 @@ def _resolve_device_config_path(path: str | Path) -> Path:
     return resolved
 
 
+def _load_device_config_json(path: str | Path) -> tuple[Path, dict[str, Any]]:
+    config_path = _resolve_device_config_path(path)
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid Piper device config JSON: {config_path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Piper device config must contain a JSON object: {config_path}")
+    if data.get("schema_version") != "1.0.0":
+        raise ValueError(f"unsupported Piper device config schema: {data.get('schema_version')}")
+    return config_path, data
+
+
+def resolve_arm_min_grasp_score(
+    path: str | Path = DEFAULT_DEVICE_CONFIG_PATH,
+    *,
+    override: float | None = None,
+) -> tuple[float, str]:
+    """Resolve the arm execution score gate and report where it came from."""
+
+    if override is not None:
+        score = float(override)
+        source = "command_line"
+    else:
+        config_path, data = _load_device_config_json(path)
+        motion = data.get("motion")
+        if not isinstance(motion, dict):
+            raise ValueError("Piper device config is missing the motion object")
+        if "arm_min_grasp_score" in motion:
+            score = float(motion["arm_min_grasp_score"])
+            source = f"{config_path}#motion.arm_min_grasp_score"
+        else:
+            score = DEFAULT_ARM_MIN_GRASP_SCORE
+            source = "built_in_default"
+    if not 0.0 <= score <= 1.0:
+        raise ValueError("Piper arm minimum grasp score must be between 0 and 1")
+    return score, source
+
+
 def _validate_camera_to_base(value: Any) -> np.ndarray:
     transform = np.asarray(value, dtype=np.float64)
     if transform.shape != (4, 4) or not np.isfinite(transform).all():
@@ -133,16 +179,18 @@ def load_device_config(
     max_reach_m: float | None = None,
     min_z_m: float | None = None,
     max_z_m: float | None = None,
+    max_abs_x_m: float | None = None,
+    max_abs_y_m: float | None = None,
+    enable_timeout_s: float | None = None,
+    move_timeout_s: float | None = None,
+    gripper_timeout_s: float | None = None,
+    position_tolerance_m: float | None = None,
+    angle_tolerance_deg: float | None = None,
+    gripper_tolerance_m: float | None = None,
 ) -> tuple[np.ndarray, ArmSafetyConfig, dict[str, Any]]:
     """Load the selected arm, calibration and safety settings from JSON."""
 
-    config_path = _resolve_device_config_path(path)
-    try:
-        data = json.loads(config_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid Piper device config JSON: {config_path}: {exc}") from exc
-    if data.get("schema_version") != "1.0.0":
-        raise ValueError(f"unsupported Piper device config schema: {data.get('schema_version')}")
+    config_path, data = _load_device_config_json(path)
 
     selected_side = arm_side or data.get("active_arm")
     arms = data.get("arms")
@@ -181,14 +229,14 @@ def load_device_config(
         max_reach_m=float(setting("max_reach_m", max_reach_m)),
         min_z_m=float(setting("min_z_m", min_z_m)),
         max_z_m=float(setting("max_z_m", max_z_m)),
-        max_abs_x_m=float(setting("max_abs_x_m", None)),
-        max_abs_y_m=float(setting("max_abs_y_m", None)),
-        enable_timeout_s=float(setting("enable_timeout_s", None)),
-        move_timeout_s=float(setting("move_timeout_s", None)),
-        gripper_timeout_s=float(setting("gripper_timeout_s", None)),
-        position_tolerance_m=float(setting("position_tolerance_m", None)),
-        angle_tolerance_deg=float(setting("angle_tolerance_deg", None)),
-        gripper_tolerance_m=float(setting("gripper_tolerance_m", None)),
+        max_abs_x_m=float(setting("max_abs_x_m", max_abs_x_m)),
+        max_abs_y_m=float(setting("max_abs_y_m", max_abs_y_m)),
+        enable_timeout_s=float(setting("enable_timeout_s", enable_timeout_s)),
+        move_timeout_s=float(setting("move_timeout_s", move_timeout_s)),
+        gripper_timeout_s=float(setting("gripper_timeout_s", gripper_timeout_s)),
+        position_tolerance_m=float(setting("position_tolerance_m", position_tolerance_m)),
+        angle_tolerance_deg=float(setting("angle_tolerance_deg", angle_tolerance_deg)),
+        gripper_tolerance_m=float(setting("gripper_tolerance_m", gripper_tolerance_m)),
     )
     metadata = {
         "config_path": str(config_path),
@@ -536,6 +584,14 @@ def run_pipeline(
     max_reach_m: float | None = None,
     min_z_m: float | None = None,
     max_z_m: float | None = None,
+    max_abs_x_m: float | None = None,
+    max_abs_y_m: float | None = None,
+    enable_timeout_s: float | None = None,
+    move_timeout_s: float | None = None,
+    gripper_timeout_s: float | None = None,
+    position_tolerance_m: float | None = None,
+    angle_tolerance_deg: float | None = None,
+    gripper_tolerance_m: float | None = None,
 ) -> dict[str, Any]:
     """Plan a Piper grasp and execute it only when ``execute`` is explicitly true."""
 
@@ -551,6 +607,14 @@ def run_pipeline(
         max_reach_m=max_reach_m,
         min_z_m=min_z_m,
         max_z_m=max_z_m,
+        max_abs_x_m=max_abs_x_m,
+        max_abs_y_m=max_abs_y_m,
+        enable_timeout_s=enable_timeout_s,
+        move_timeout_s=move_timeout_s,
+        gripper_timeout_s=gripper_timeout_s,
+        position_tolerance_m=position_tolerance_m,
+        angle_tolerance_deg=angle_tolerance_deg,
+        gripper_tolerance_m=gripper_tolerance_m,
     )
     plan = build_motion_plan(
         rotation_camera,
@@ -599,6 +663,26 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--arm-can-interface")
     parser.add_argument("--arm-speed-percent", type=int)
     parser.add_argument("--arm-gripper-max-width", type=float)
+    parser.add_argument(
+        "--arm-min-grasp-score",
+        type=float,
+        default=None,
+        help="minimum AnyGrasp score; defaults to motion.arm_min_grasp_score in --arm-config",
+    )
+    parser.add_argument("--arm-tool-offset", type=float)
+    parser.add_argument("--arm-pregrasp-clearance", type=float)
+    parser.add_argument("--arm-lift-distance", type=float)
+    parser.add_argument("--arm-max-reach", type=float)
+    parser.add_argument("--arm-min-z", type=float)
+    parser.add_argument("--arm-max-z", type=float)
+    parser.add_argument("--arm-max-abs-x", type=float)
+    parser.add_argument("--arm-max-abs-y", type=float)
+    parser.add_argument("--arm-enable-timeout", type=float)
+    parser.add_argument("--arm-move-timeout", type=float)
+    parser.add_argument("--arm-gripper-timeout", type=float)
+    parser.add_argument("--arm-position-tolerance", type=float)
+    parser.add_argument("--arm-angle-tolerance", type=float)
+    parser.add_argument("--arm-gripper-tolerance", type=float)
     return parser
 
 
@@ -623,6 +707,18 @@ def main() -> int:
     grasp = run_anygrasp(run_dir, args, data_dir=run_dir)
     if grasp is None:
         raise RuntimeError("AnyGrasp did not return a valid grasp")
+    min_grasp_score, _ = resolve_arm_min_grasp_score(
+        args.arm_config,
+        override=args.arm_min_grasp_score,
+    )
+    grasp_score_value = getattr(args, "grasp_score", None)
+    if args.execute_arm and grasp_score_value is None:
+        raise RuntimeError("AnyGrasp did not expose a score for safety validation")
+    if args.execute_arm and float(grasp_score_value) < min_grasp_score:
+        raise RuntimeError(
+            f"AnyGrasp score {float(grasp_score_value):.6f} is below the arm threshold "
+            f"{min_grasp_score:.6f}"
+        )
     run_pipeline(
         grasp[0],
         grasp[1],
@@ -633,6 +729,20 @@ def main() -> int:
         can_name=args.arm_can_interface,
         motion_speed_percent=args.arm_speed_percent,
         gripper_max_width_m=args.arm_gripper_max_width,
+        tool_offset_m=args.arm_tool_offset,
+        pregrasp_clearance_m=args.arm_pregrasp_clearance,
+        lift_distance_m=args.arm_lift_distance,
+        max_reach_m=args.arm_max_reach,
+        min_z_m=args.arm_min_z,
+        max_z_m=args.arm_max_z,
+        max_abs_x_m=args.arm_max_abs_x,
+        max_abs_y_m=args.arm_max_abs_y,
+        enable_timeout_s=args.arm_enable_timeout,
+        move_timeout_s=args.arm_move_timeout,
+        gripper_timeout_s=args.arm_gripper_timeout,
+        position_tolerance_m=args.arm_position_tolerance,
+        angle_tolerance_deg=args.arm_angle_tolerance,
+        gripper_tolerance_m=args.arm_gripper_tolerance,
     )
     return 0
 

@@ -157,14 +157,14 @@ class PipelineSafetyTests(unittest.TestCase):
                     {
                         "executed": False,
                         "plan": {"safe": True},
-                        "safety": {"can_name": "can2"},
-                        "device": {"arm_side": "left", "can_interface": "can2"},
+                        "safety": {"can_name": "can1"},
+                        "device": {"arm_side": "left", "can_interface": "can1"},
                     },
                     {
                         "executed": True,
                         "plan": {"safe": True},
-                        "safety": {"can_name": "can2"},
-                        "device": {"arm_side": "left", "can_interface": "can2"},
+                        "safety": {"can_name": "can1"},
+                        "device": {"arm_side": "left", "can_interface": "can1"},
                     },
                 ]
             )
@@ -201,7 +201,12 @@ class PipelineSafetyTests(unittest.TestCase):
             self.assertEqual(result["arm_execution_state"], "complete")
             metadata = json.loads(Path(result["metadata"]).read_text(encoding="utf-8"))
             self.assertEqual(metadata["arm_device"]["arm_side"], "left")
-            self.assertEqual(metadata["arm_device"]["can_interface"], "can2")
+            self.assertEqual(metadata["arm_device"]["can_interface"], "can1")
+            self.assertEqual(metadata["arm_min_grasp_score"], 0.2)
+            self.assertIn(
+                "#motion.arm_min_grasp_score",
+                metadata["arm_min_grasp_score_source"],
+            )
 
     def test_arm_dry_run_plans_once_without_hardware_execution(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -215,8 +220,8 @@ class PipelineSafetyTests(unittest.TestCase):
                 return_value={
                     "executed": False,
                     "plan": {"safe": True},
-                    "safety": {"can_name": "can2"},
-                    "device": {"arm_side": "left", "can_interface": "can2"},
+                    "safety": {"can_name": "can1"},
+                    "device": {"arm_side": "left", "can_interface": "can1"},
                 }
             )
 
@@ -251,6 +256,74 @@ class PipelineSafetyTests(unittest.TestCase):
             self.assertEqual(result["arm_execution_state"], "dry_run_complete")
             metadata = json.loads(Path(result["metadata"]).read_text(encoding="utf-8"))
             self.assertFalse(metadata["arm_score_gate_passed"])
+
+    def test_arm_cli_overrides_include_move_timeout_and_tolerances(self) -> None:
+        args = asdepth_pipeline.build_parser().parse_args(
+            [
+                "--depth-checkpoint",
+                "asdepth.ckpt",
+                "--depth-model",
+                "defm_stackconv_depth",
+                "--arm-move-timeout",
+                "20",
+                "--arm-position-tolerance",
+                "0.006",
+                "--arm-angle-tolerance",
+                "4",
+            ]
+        )
+
+        kwargs = asdepth_pipeline._arm_runner_kwargs(args)
+
+        self.assertEqual(kwargs["move_timeout_s"], 20.0)
+        self.assertEqual(kwargs["position_tolerance_m"], 0.006)
+        self.assertEqual(kwargs["angle_tolerance_deg"], 4.0)
+
+    def test_configured_arm_threshold_rejects_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            directory = Path(value)
+            args, depth_checkpoint, _ = self._args(directory, execute_arm=True)
+            config_path = Path(__file__).resolve().parents[1] / "config/piper_device.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["motion"]["arm_min_grasp_score"] = 0.9
+            custom_config = directory / "piper.json"
+            custom_config.write_text(json.dumps(config), encoding="utf-8")
+            args.arm_config = str(custom_config)
+
+            def fake_grasp(_save_dir, cfg, *, rgb, depth):
+                cfg.grasp_score = 0.8
+                cfg.grasp_count = 1
+                return np.eye(3), np.array([0.1, 0.2, 0.3]), 0.04
+
+            with (
+                mock.patch.object(
+                    asdepth_pipeline,
+                    "_load_anygrasp_function",
+                    return_value=fake_grasp,
+                ),
+                mock.patch.object(
+                    asdepth_pipeline,
+                    "_load_arm_runner",
+                    side_effect=AssertionError("rejected grasp must not load the arm runner"),
+                ),
+                mock.patch.object(
+                    asdepth_depth,
+                    "load_depth_model",
+                    return_value=self._loaded(depth_checkpoint),
+                ),
+                mock.patch.object(
+                    asdepth_depth,
+                    "predict_depth",
+                    return_value=np.full((4, 6), 1.5, dtype=np.float32),
+                ),
+                self.assertRaisesRegex(RuntimeError, "0.900000"),
+            ):
+                asdepth_pipeline.run(args)
+
+            metadata_path = next((directory / "runs").glob("run_*/run_metadata.json"))
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            self.assertEqual(metadata["arm_min_grasp_score"], 0.9)
+            self.assertIn("#motion.arm_min_grasp_score", metadata["arm_min_grasp_score_source"])
 
     def test_low_grasp_score_rejects_execution_before_loading_piper(self) -> None:
         with tempfile.TemporaryDirectory() as value:
