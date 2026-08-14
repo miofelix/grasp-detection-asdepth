@@ -2,7 +2,7 @@
 
 `as_depth-0.3.0-py3-none-any.whl` 来自：
 
-- repository: `/Users/felix/Projects/AS-Depth-Research`
+- repository: <https://github.com/miofelix/AS-Depth-Research>
 - commit: `214e501321634d44d2bccdaea4c5a7a637ee70bc`
 - SHA-256: `d1061f06090577286614ed4216e441a3c119ba3034c8db8bbd3baf52b14fee78`
 

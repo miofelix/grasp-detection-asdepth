@@ -1,6 +1,6 @@
-# AS-Depth 多模型推理说明
+# RGB-D 深度模型目录与推理说明
 
-当前项目通过内置的 `as-depth 0.3.0` wheel 使用 AS-Depth Research 的 canonical model catalog。
+当前项目通过内置的 `as-depth 0.3.0` wheel 使用统一的 RGB-D 深度模型目录。
 模型身份由 `model_id + model_version + config_hash` 组成，checkpoint 不再固定绑定
 `defm_stackconv_depth`。
 
@@ -18,7 +18,7 @@ python asdepth_models.py --json
 --depth-model <canonical model_id | auto>
 ```
 
-默认值为 `defm_stackconv_depth`，用于兼容已有 AS-Depth-2 部署。`auto` 的解析优先级为：
+默认值为 `defm_stackconv_depth`，用于兼容已有部署。`auto` 的解析优先级为：
 
 ```text
 checkpoint manifest → 历史 checkpoint 路径 registry → 报错

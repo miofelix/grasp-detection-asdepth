@@ -164,7 +164,7 @@ def _legacy_predict_depth(
     input_size: int,
     resize_method: Literal["lower_bound", "upper_bound"],
 ) -> np.ndarray:
-    """保留旧测试/调用方构造 `LoadedDepthModel` 时的单模型行为。"""
+    """兼容旧测试和调用方直接构造 ``LoadedDepthModel`` 的推理行为。"""
 
     original_shape = tuple(int(value) for value in np.asarray(color_bgr).shape[:2])
     inputs = prepare_rgbd_input(

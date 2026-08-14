@@ -2,7 +2,7 @@
 #
 # This source code is licensed under the Apache License, Version 2.0.
 
-"""构建旧 AS-Depth-2 兼容快照使用的 DeFM ViT-L/14 backbone。"""
+"""构建早期 ``defm_stackconv_depth`` 兼容快照使用的 DeFM ViT-L/14 backbone。"""
 
 from __future__ import annotations
 
