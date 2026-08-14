@@ -37,8 +37,27 @@ python3.10 -m pip install -r requirements-asdepth.txt
 python3.10 -m pip install -r requirements-realsense.txt
 ```
 
-新增入口复用现有 `get_pose.py`，而该文件在模块加载时会导入 `pyrealsense2`，所以当前离线 RGB-D
-模式同样需要上述 RealSense Python 依赖。为保持最小迁移，没有改动师兄的导入结构。
+完整抓取入口复用现有 `get_pose.py`，而该文件在模块加载时会导入 `pyrealsense2`，所以
+`asdepth_pipeline.py` 的离线 RGB-D 模式同样需要上述 RealSense Python 依赖。为保持最小迁移，
+没有改动师兄的导入结构；仅深度预测可使用下方独立入口绕过这些依赖。
+
+### macOS 仅深度预测
+
+macOS（包括 Apple Silicon）不能加载仓库中的 Linux x86-64 AnyGrasp GSNet 二进制。如果只想在
+Mac 上验证 AS-Depth 的 RGB-D 深度预测，可使用不导入 AnyGrasp、RealSense 或 Piper 的独立入口：
+
+```bash
+python asdepth_depth_only.py \
+  --depth-checkpoint /path/to/asdepth2.ckpt \
+  --rgb-image example_data/color.png \
+  --depth-image example_data/depth.png \
+  --save-dir debug/asdepth-only \
+  --device mps
+```
+
+该入口只需要 `requirements-asdepth.txt` 中的依赖，输出 `pred_depth.npy` 和
+`run_metadata.json`。它不能生成 AnyGrasp 抓取姿态；完整抓取仍需在 Linux x86-64 环境运行
+`asdepth_pipeline.py`。
 
 现有 GSNet/AnyGrasp 二进制还可能受 CUDA、libstdc++、OpenSSL 1.1 和许可证环境约束，必须在目标
 Linux 服务器上做最终验证。macOS 可运行帮助、静态检查和轻量测试，但不能运行仓库内的 GSNet 二进制。
