@@ -1,9 +1,4 @@
-"""常见 PyTorch 单文件 checkpoint 的历史兼容加载器。
-
-该模块不绑定具体模型架构，只负责从旧式单文件中提取并规范化
-``state_dict``。当前 catalog 模型由 ``asdepth.inference`` 的正式
-checkpoint loader 加载；这里保留给旧调用方和兼容测试使用。
-"""
+"""AS-Depth-2 旧单文件 checkpoint 的最小安全加载器。"""
 
 from __future__ import annotations
 
@@ -21,8 +16,6 @@ STRIP_PREFIXES = ("module.", "state_dict.")
 
 @dataclass(frozen=True, slots=True)
 class CheckpointLoadReport:
-    """历史单文件 checkpoint 的轻量读取报告。"""
-
     path: Path
     source_key: str
     tensor_count: int
@@ -88,7 +81,7 @@ def load_checkpoint(
     *,
     trusted_pickle: bool = False,
 ) -> tuple[StateDict, CheckpointLoadReport]:
-    """读取旧式单文件 checkpoint，并返回规范化 state_dict 与轻量报告。"""
+    """读取 checkpoint，并返回规范化 state_dict 与不持有 tensor 的报告。"""
 
     path = Path(checkpoint).expanduser().resolve()
     if not path.is_file():

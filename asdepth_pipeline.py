@@ -1,4 +1,4 @@
-"""RealSense RGB-D → AS-Depth catalog 模型 → AnyGrasp → 可选 Piper。"""
+"""RealSense RGB-D → AS-Depth-2 → AnyGrasp → 可选 Piper 的安全入口。"""
 
 from __future__ import annotations
 
@@ -18,15 +18,10 @@ import numpy as np
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="使用本地 AS-Depth catalog 模型替换旧远程单目深度服务",
+        description="使用本地 AS-Depth-2 替换旧远程单目深度服务的抓取流水线",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--depth-checkpoint", required=True, help="AS-Depth checkpoint 文件或目录")
-    parser.add_argument(
-        "--depth-model",
-        default="defm_stackconv_depth",
-        help="canonical model_id；使用 auto 时按 checkpoint manifest/历史路径解析",
-    )
+    parser.add_argument("--depth-checkpoint", required=True, help="AS-Depth-2 checkpoint 路径")
     parser.add_argument(
         "--grasp-checkpoint",
         default="ckpts/checkpoint-rs.tar",
@@ -80,13 +75,6 @@ def _resolve_file(path: str | Path, *, label: str) -> Path:
     resolved = Path(path).expanduser().resolve()
     if not resolved.is_file():
         raise FileNotFoundError(f"{label} does not exist: {resolved}")
-    return resolved
-
-
-def _resolve_checkpoint(path: str | Path) -> Path:
-    resolved = Path(path).expanduser().resolve()
-    if not resolved.exists() or not (resolved.is_file() or resolved.is_dir()):
-        raise FileNotFoundError(f"AS-Depth checkpoint does not exist: {resolved}")
     return resolved
 
 
@@ -179,7 +167,7 @@ def _grasp_config(args: argparse.Namespace, checkpoint: Path) -> SimpleNamespace
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    depth_checkpoint = _resolve_checkpoint(args.depth_checkpoint)
+    depth_checkpoint = _resolve_file(args.depth_checkpoint, label="AS-Depth checkpoint")
     grasp_checkpoint = _resolve_file(args.grasp_checkpoint, label="AnyGrasp checkpoint")
     capture_one_frame, run_anygrasp = _load_anygrasp_functions()
 
@@ -198,7 +186,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     load_started = time.perf_counter()
     loaded = load_depth_model(
         depth_checkpoint,
-        model_id=args.depth_model,
         device=args.device,
         trusted_pickle=args.trusted_depth_checkpoint,
     )
@@ -216,7 +203,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     depth_ms = (time.perf_counter() - depth_started) * 1000.0
     checkpoint_report = loaded.checkpoint
     resolved_device = str(loaded.device)
-    model_metadata = dict(loaded.metadata)
     del loaded
     _clear_model_cache()
 
@@ -246,18 +232,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "schema_version": "1.0.0",
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        **model_metadata,
+        "model_id": "defm_stackconv_depth",
         "depth_checkpoint": str(depth_checkpoint),
         "depth_checkpoint_source_key": checkpoint_report.source_key,
         "depth_checkpoint_tensor_count": checkpoint_report.tensor_count,
         "depth_checkpoint_stripped_prefixes": list(checkpoint_report.stripped_prefixes),
-        "depth_checkpoint_step": getattr(checkpoint_report, "step", None),
-        "depth_checkpoint_missing_keys": list(
-            getattr(checkpoint_report, "missing_keys", ())
-        ),
-        "depth_checkpoint_unexpected_keys": list(
-            getattr(checkpoint_report, "unexpected_keys", ())
-        ),
         "grasp_checkpoint": str(grasp_checkpoint),
         "rgb_image": str(rgb_path.resolve()),
         "raw_depth_image": str(depth_path.resolve()),

@@ -1,10 +1,4 @@
-"""相机 raw depth 清理与历史四通道 RGB-D 预处理兼容工具。
-
-``metric_depth_from_raw`` 是 catalog 模型共用的输入边界；尺寸计算和
-``prepare_rgbd_input`` 则服务于没有 ``ModelSpec`` 的历史兼容调用路径。
-正式 catalog 模型的 resize、normalize 和模型特定预处理由
-``asdepth.inference`` 负责。
-"""
+"""RealSense BGR/raw depth 到 AS-Depth-2 四通道输入的预处理。"""
 
 from __future__ import annotations
 
@@ -42,8 +36,6 @@ def output_size(
     input_size: int,
     resize_method: Literal["lower_bound", "upper_bound"],
 ) -> tuple[int, int]:
-    """计算历史 DPT 四通道预处理使用的 patch 对齐尺寸。"""
-
     if width <= 0 or height <= 0 or input_size <= 0:
         raise ValueError("image dimensions and input_size must be positive")
     if resize_method not in {"lower_bound", "upper_bound"}:
@@ -67,8 +59,6 @@ def metric_depth_from_raw(
     depth_scale: float,
     max_depth_m: float,
 ) -> np.ndarray:
-    """把相机 raw depth 清理并转换为通用的 float32 米制深度。"""
-
     if depth_scale <= 0 or max_depth_m <= 0:
         raise ValueError("depth_scale and max_depth_m must be positive")
     raw = np.asarray(raw_depth)
@@ -91,7 +81,7 @@ def prepare_rgbd_input(
     input_size: int = 518,
     resize_method: Literal["lower_bound", "upper_bound"] = "lower_bound",
 ) -> torch.Tensor:
-    """为历史兼容路径生成 ``1x4xHxW`` float32 米制输入。"""
+    """生成 ``1x4xHxW`` float32 tensor；深度通道单位为 meter。"""
 
     color = np.asarray(color_bgr)
     if color.ndim != 3 or color.shape[-1] != 3:

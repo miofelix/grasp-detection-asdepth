@@ -1,1 +1,1 @@
-"""早期 ``defm_stackconv_depth`` 兼容快照使用的组件。"""
+"""AS-Depth-2 主模型使用的组件。"""

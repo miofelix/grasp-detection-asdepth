@@ -56,14 +56,6 @@ class PipelineSafetyTests(unittest.TestCase):
         return SimpleNamespace(
             checkpoint=CheckpointLoadReport(checkpoint, "state_dict", 804, ()),
             device=torch.device("cpu"),
-            metadata={
-                "model_id": "defm_stackconv_depth",
-                "model_version": "test",
-                "config_hash": "test-hash",
-                "native_depth": "metric_depth",
-                "sparse_raw_depth": False,
-                "resolution_source": "test",
-            },
         )
 
     def test_default_run_does_not_import_or_execute_piper(self) -> None:
