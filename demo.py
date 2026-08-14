@@ -11,7 +11,6 @@ from PIL import Image
 
 from anygrasp_runtime import create_detector, predict_grasps
 
-
 # 本项目 D435 场景配置；官方 SDK 代码保持在上游仓库中，不在这里修改。
 CAMERA_INTRINSICS = (488.28772, 488.28772, 315.879547, 213.037033)
 WORKSPACE_LIMITS = (-0.24, 0.40, -0.4, 0.4, 0.0, 3.0)
@@ -44,9 +43,7 @@ def load_point_cloud(data_dir: str | Path, prefix: str) -> tuple[np.ndarray, np.
     colors = np.asarray(Image.open(color_path).convert("RGB"), dtype=np.float32) / 255.0
     depths = np.asarray(Image.open(depth_path))
     if depths.ndim != 2 or depths.shape != colors.shape[:2]:
-        raise ValueError(
-            f"invalid RGB-D shapes: color={colors.shape}, depth={depths.shape}"
-        )
+        raise ValueError(f"invalid RGB-D shapes: color={colors.shape}, depth={depths.shape}")
 
     fx, fy, cx, cy = CAMERA_INTRINSICS
     xmap, ymap = np.meshgrid(np.arange(depths.shape[1]), np.arange(depths.shape[0]))

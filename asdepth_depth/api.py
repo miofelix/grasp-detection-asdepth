@@ -43,8 +43,7 @@ def _device(value: str | torch.device | None) -> torch.device:
 def _requested_model_id(model_id: str) -> DepthModelId:
     if model_id not in SUPPORTED_MODEL_IDS:
         raise ValueError(
-            f"unsupported depth model {model_id!r}; "
-            f"choose one of {', '.join(SUPPORTED_MODEL_IDS)}"
+            f"unsupported depth model {model_id!r}; choose one of {', '.join(SUPPORTED_MODEL_IDS)}"
         )
     return cast(DepthModelId, model_id)
 
@@ -104,15 +103,11 @@ def _primary_depth(value: Any) -> torch.Tensor:
             raise ValueError("depth model returned an empty sequence")
         value = value[0]
     if not isinstance(value, torch.Tensor):
-        raise TypeError(
-            f"depth model output must be a tensor, got {type(value).__name__}"
-        )
+        raise TypeError(f"depth model output must be a tensor, got {type(value).__name__}")
     if value.ndim == 4 and value.shape[1] == 1:
         value = value[:, 0]
     if value.ndim != 3 or value.shape[0] != 1:
-        raise ValueError(
-            f"depth model output must be 1xHxW or 1x1xHxW, got {tuple(value.shape)}"
-        )
+        raise ValueError(f"depth model output must be 1xHxW or 1x1xHxW, got {tuple(value.shape)}")
     return value
 
 

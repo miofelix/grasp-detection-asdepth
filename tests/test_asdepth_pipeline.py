@@ -119,14 +119,10 @@ class PipelineSafetyTests(unittest.TestCase):
                     "_load_anygrasp_functions",
                     return_value=(
                         mock.Mock(),
-                        mock.Mock(
-                            return_value=(np.eye(3), np.array([0.1, 0.2, 0.3]), 0.04)
-                        ),
+                        mock.Mock(return_value=(np.eye(3), np.array([0.1, 0.2, 0.3]), 0.04)),
                     ),
                 ),
-                mock.patch.object(
-                    asdepth_pipeline, "_load_arm_runner", return_value=arm_runner
-                ),
+                mock.patch.object(asdepth_pipeline, "_load_arm_runner", return_value=arm_runner),
                 mock.patch.object(
                     asdepth_depth,
                     "load_depth_model",
@@ -146,9 +142,7 @@ class PipelineSafetyTests(unittest.TestCase):
     def test_main_converts_expected_type_error_to_exit_code_two(self) -> None:
         stderr = io.StringIO()
         with (
-            mock.patch.object(
-                asdepth_pipeline, "run", side_effect=TypeError("invalid checkpoint")
-            ),
+            mock.patch.object(asdepth_pipeline, "run", side_effect=TypeError("invalid checkpoint")),
             mock.patch("sys.stderr", stderr),
         ):
             exit_code = asdepth_pipeline.main(

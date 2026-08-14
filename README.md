@@ -107,15 +107,14 @@ python -c "import MinkowskiEngine; print('MinkowskiEngine: OK')"
 
 | 文件 | 用途 | 示例路径 |
 | --- | --- | --- |
-| `defm_vit_l14_depth` checkpoint | DeFM + DPT 米制深度补全 | `ckpts/defm_vit_l14_depth.ckpt` |
-| `defm_stackconv_depth` checkpoint | DeFM + stack-conv 米制深度补全 | `ckpts/defm_stackconv_depth.ckpt` |
+| 深度模型 checkpoint | 与 `--depth-model` 所选架构匹配的米制深度模型 | `ckpts/depth_model.ckpt` |
 | AnyGrasp checkpoint | 从点云预测抓取位姿 | `ckpts/checkpoint-rs.tar` |
 
 建议统一放到仓库的 `ckpts/` 目录：
 
 ```bash
 mkdir -p ckpts
-cp /path/to/depth_model.ckpt ckpts/defm_vit_l14_depth.ckpt
+cp /path/to/depth_model.ckpt ckpts/depth_model.ckpt
 cp /path/to/checkpoint-rs.tar ckpts/checkpoint-rs.tar
 ```
 
@@ -183,7 +182,7 @@ example_data/depth.png
 
 ```bash
 python asdepth_depth_only.py \
-  --depth-checkpoint ckpts/defm_vit_l14_depth.ckpt \
+  --depth-checkpoint ckpts/depth_model.ckpt \
   --depth-model defm_vit_l14_depth \
   --rgb-image example_data/color.png \
   --depth-image example_data/depth.png \
@@ -242,7 +241,7 @@ zmin, zmax = ...
 
 ```bash
 python asdepth_pipeline.py \
-  --depth-checkpoint ckpts/defm_vit_l14_depth.ckpt \
+  --depth-checkpoint ckpts/depth_model.ckpt \
   --depth-model defm_vit_l14_depth \
   --grasp-checkpoint ckpts/checkpoint-rs.tar \
   --rgb-image example_data/color.png \
@@ -255,7 +254,7 @@ python asdepth_pipeline.py \
 
 ```bash
 python asdepth_pipeline.py \
-  --depth-checkpoint ckpts/defm_vit_l14_depth.ckpt \
+  --depth-checkpoint ckpts/depth_model.ckpt \
   --depth-model defm_vit_l14_depth \
   --grasp-checkpoint ckpts/checkpoint-rs.tar \
   --rgb-image example_data/color.png \
@@ -273,7 +272,7 @@ python asdepth_pipeline.py \
 
 ```bash
 python asdepth_pipeline.py \
-  --depth-checkpoint ckpts/defm_vit_l14_depth.ckpt \
+  --depth-checkpoint ckpts/depth_model.ckpt \
   --depth-model defm_vit_l14_depth \
   --grasp-checkpoint ckpts/checkpoint-rs.tar \
   --save-dir debug/asdepth \
@@ -328,7 +327,7 @@ debug/asdepth/<本次运行目录>/
 
 ```bash
 python asdepth_pipeline.py \
-  --depth-checkpoint ckpts/defm_vit_l14_depth.ckpt \
+  --depth-checkpoint ckpts/depth_model.ckpt \
   --depth-model defm_vit_l14_depth \
   --grasp-checkpoint ckpts/checkpoint-rs.tar \
   --save-dir debug/asdepth \
@@ -408,7 +407,6 @@ DeFM 桥接会主动使用非 xFormers 路径以保持 checkpoint 参数结构�
 - `demo.py` / `demo.sh`：只使用 AnyGrasp 的离线场景示例，读取 `test_color.png` 和 `test_depth.png`，不经过深度补全模型；
 - `get_pose.py`：RealSense 采集和 AnyGrasp 的底层实现，包含现场相机内参与工作区；
 - `grasp_piper.py`：Piper 坐标转换和控制逻辑；
-- `pipline.py`：历史远程 GAVP + AprilTag 流程，不是新用户推荐入口；
 - `USAGE.md`：AnyGrasp 2026 SDK 接口和 steering 参数说明。
 
 ## 15. 测试
@@ -417,10 +415,13 @@ DeFM 桥接会主动使用非 xFormers 路径以保持 checkpoint 参数结构�
 
 ```bash
 conda activate grasp-asdepth
+python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
+ruff check .
+ruff format --check .
 ```
 
-单元测试不会加载真实 checkpoint、GSNet 或 RealSense，也不会控制机械臂。真实 CUDA、许可证、相机和机械臂仍需在目标 Linux 主机上分别验收。
+Ruff 规则集中配置在 `pyproject.toml` 中，并排除了按上游原样保留的 vendor 代码。单元测试不会加载真实 checkpoint、GSNet 或 RealSense，也不会控制机械臂。真实 CUDA、许可证、相机和机械臂仍需在目标 Linux 主机上分别验收。
 
 ## 第三方代码与边界
 

@@ -43,9 +43,7 @@ def output_size(
     scales = (input_size / height, input_size / width)
     scale = max(scales) if resize_method == "lower_bound" else min(scales)
     constraint = (
-        {"minimum": input_size}
-        if resize_method == "lower_bound"
-        else {"maximum": input_size}
+        {"minimum": input_size} if resize_method == "lower_bound" else {"maximum": input_size}
     )
     return (
         _constrain(scale * width, **constraint),
@@ -94,9 +92,7 @@ def prepare_rgbd_input(
         max_depth_m=max_depth_m,
     )
     if metric.shape != color.shape[:2]:
-        raise ValueError(
-            f"RGB/depth spatial mismatch: rgb={color.shape[:2]}, depth={metric.shape}"
-        )
+        raise ValueError(f"RGB/depth spatial mismatch: rgb={color.shape[:2]}, depth={metric.shape}")
 
     size = output_size(
         color.shape[1],
@@ -104,9 +100,7 @@ def prepare_rgbd_input(
         input_size=input_size,
         resize_method=resize_method,
     )
-    rgb = cv2.cvtColor(color.astype(np.uint8, copy=False), cv2.COLOR_BGR2RGB).astype(
-        np.float32
-    )
+    rgb = cv2.cvtColor(color.astype(np.uint8, copy=False), cv2.COLOR_BGR2RGB).astype(np.float32)
     rgb *= np.float32(1.0 / 255.0)
     rgb = cv2.resize(rgb, size, interpolation=cv2.INTER_CUBIC)
     rgb = (rgb - IMAGENET_MEAN) / IMAGENET_STD

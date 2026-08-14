@@ -1,22 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import time
-from piper_sdk import *
-import math
-import numpy as np
-from get_pose import run_anygrasp,capture_one_frame
 import argparse
+import math
+import time
+
+import numpy as np
 import open3d as o3d
-import datetime
-def to_um(m):      # 米 → 微米（mm*1e3 == um）
+from piper_sdk import C_PiperInterface_V2
+
+from get_pose import capture_one_frame, run_anygrasp
+
+
+def to_um(m):  # 米 → 微米（mm*1e3 == um）
     return int(round(m * 1e6))
+
 
 def deg_to_mdeg(deg):  # 度 → 毫度
     return int(round(deg * 1e3))
 
+
 def rad2deg(angles):
     return tuple(np.degrees(angles))
+
 
 def euler_zyx(R):
     """
@@ -26,10 +32,11 @@ def euler_zyx(R):
     # pitch = asin(-r31)
     pitch = math.asin(-R[2, 0])
     # roll  = atan2(r32, r33)
-    roll  = math.atan2(R[2, 1], R[2, 2])
+    roll = math.atan2(R[2, 1], R[2, 2])
     # yaw   = atan2(r21, r11)
-    yaw   = math.atan2(R[1, 0], R[0, 0])
+    yaw = math.atan2(R[1, 0], R[0, 0])
     return roll, pitch, yaw
+
 
 def euler_xyz(R):
     """
@@ -45,15 +52,22 @@ def euler_xyz(R):
     return rx, ry, rz
 
     # ------- ZYX 欧拉角分解（R = Rz * Ry * Rx）-------
+
+
 def clamp(x, lo=-1.0, hi=1.0):
     return min(max(x, lo), hi)
 
 
 GRIPPER_DISTANCE = 0.07
-T_cam2base = np.array( [[-0.03188415, -0.64642446,  0.7623115 , -0.02826907],
- [-0.99742629 ,-0.02842686 ,-0.06582336 ,-0.2205848 ],
- [ 0.06421995 ,-0.76244825 ,-0.64385438  ,0.57842954],
- [ 0.      ,    0.       ,   0.      ,    1.        ]])
+T_cam2base = np.array(
+    [
+        [-0.03188415, -0.64642446, 0.7623115, -0.02826907],
+        [-0.99742629, -0.02842686, -0.06582336, -0.2205848],
+        [0.06421995, -0.76244825, -0.64385438, 0.57842954],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+)
+
 
 def visualize_pose_with_origin(T):
     t = T[:3, 3]
@@ -64,7 +78,7 @@ def visualize_pose_with_origin(T):
 
     # 物体坐标系 (小一点，代表检测到的姿态)
     obj_axes = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-    obj_axes.rotate(R, center=[0,0,0])
+    obj_axes.rotate(R, center=[0, 0, 0])
     obj_axes.translate(t)
 
     # 小球标记物体位置
@@ -73,9 +87,9 @@ def visualize_pose_with_origin(T):
     sphere.translate(t)
 
     # 一条线：从原点到物体位置
-    line_points = [ [0,0,0], t.tolist() ]
-    lines = [[0,1]]
-    colors = [[1,0,1]]  # 紫色
+    line_points = [[0, 0, 0], t.tolist()]
+    lines = [[0, 1]]
+    colors = [[1, 0, 1]]  # 紫色
     line_set = o3d.geometry.LineSet(
         points=o3d.utility.Vector3dVector(line_points),
         lines=o3d.utility.Vector2iVector(lines),
@@ -85,8 +99,8 @@ def visualize_pose_with_origin(T):
     # 显示
     o3d.visualization.draw_geometries([origin_axes, obj_axes, sphere, line_set])
 
-def move_with_check(piper, X, Y, Z, RX, RY, RZ,
-                    pos_tol=5_000, ang_tol=5_000, max_iter=1000):
+
+def move_with_check(piper, X, Y, Z, RX, RY, RZ, pos_tol=5_000, ang_tol=5_000, max_iter=1000):
     """
     控制机械臂移动并等待收敛
     - piper: 控制接口
@@ -102,17 +116,21 @@ def move_with_check(piper, X, Y, Z, RX, RY, RZ,
         piper.EndPoseCtrl(X, Y, Z, RX, RY, RZ)
         ep = piper.GetArmEndPoseMsgs().end_pose
 
-        if (abs(ep.RX_axis - X) < pos_tol and
-            abs(ep.RY_axis - Y) < pos_tol and
-            abs(ep.RZ_axis - Z) < pos_tol and
-            abs(ep.Rx - RX) < ang_tol and
-            abs(ep.Ry - RY) < ang_tol and
-            abs(ep.Rz - RZ) < ang_tol):
+        if (
+            abs(ep.RX_axis - X) < pos_tol
+            and abs(ep.RY_axis - Y) < pos_tol
+            and abs(ep.RZ_axis - Z) < pos_tol
+            and abs(ep.Rx - RX) < ang_tol
+            and abs(ep.Ry - RY) < ang_tol
+            and abs(ep.Rz - RZ) < ang_tol
+        ):
             break
         if cnt > max_iter:
             print("❌ 到位超时，退出循环")
             break
         time.sleep(0.005)
+
+
 def to_range_minus90_90(angle_deg: float) -> float:
     """
     输入: 任意角度 (度)
@@ -128,11 +146,10 @@ def to_range_minus90_90(angle_deg: float) -> float:
     return angle
 
 
-
-def run_pipline(R_cam, t_cam, width):
+def run_pipeline(R_cam, t_cam, width):
     T_cam2obj = np.eye(4, dtype=float)
     T_cam2obj[:3, :3] = R_cam
-    T_cam2obj[:3,  3] = t_cam
+    T_cam2obj[:3, 3] = t_cam
     # ===== 1) 可视化原始位姿坐标系=====
     R_base_orig = (T_cam2base @ T_cam2obj)[:3, :3]
     p_base_orig = (T_cam2base @ T_cam2obj)[:3, 3]
@@ -141,18 +158,18 @@ def run_pipline(R_cam, t_cam, width):
     print("原始位姿 x y z (m):", *[f"{v:.8f}" for v in p_base_orig])
     print("原始位姿 rx ry rz (deg):", *[f"{v:.8f}" for v in (rx0_d, ry0_d, rz0_d)])
 
-
     # ===== 2) 轴系映射（在物体局部做重排：右乘）=====
     # 目标：new_x = old_z, new_y = old_y, new_z = old_x
     M = np.eye(4, dtype=float)
-    M[:3, :3] = np.array([
-        [0, 0, 1],   # new_x ← old_z
-        [0, -1, 0],   # new_y ← -old_y
-        [1, 0, 0],   # new_z ← old_x
-    ], dtype=float)
+    M[:3, :3] = np.array(
+        [
+            [0, 0, 1],  # new_x ← old_z
+            [0, -1, 0],  # new_y ← -old_y
+            [1, 0, 0],  # new_z ← old_x
+        ],
+        dtype=float,
+    )
     T_cam2obj = T_cam2obj @ M
-
-
 
     # ===== 3) 在物体局部 z 轴方向后退 10 cm（右乘）=====
     distance = GRIPPER_DISTANCE  # 10 cm
@@ -163,29 +180,32 @@ def run_pipline(R_cam, t_cam, width):
     distance_mid = 0.15
     delta_mid = np.eye(4, dtype=float)
     delta_mid[:3, 3] = np.array([0, 0, -distance_mid], dtype=float)
-    T_cam2obj_mid = T_cam2obj @ delta_mid 
+    T_cam2obj_mid = T_cam2obj @ delta_mid
     # ===== 4) 左乘到基座坐标系 =====
     T_base2obj = T_cam2base @ T_cam2obj
-    T_base2obj_mid= T_cam2base @ T_cam2obj_mid
+    T_base2obj_mid = T_cam2base @ T_cam2obj_mid
     # ===== 5) 提取基座下的姿态与位置 =====
     R_base = T_base2obj[:3, :3].copy()
-    p_base = T_base2obj[:3,  3].copy()   # (x,y,z) in meters
-    p_mid=T_base2obj_mid[:3,3].copy() 
-    #visualize_pose_with_origin(T_base2obj)
-
+    p_base = T_base2obj[:3, 3].copy()  # (x,y,z) in meters
+    p_mid = T_base2obj_mid[:3, 3].copy()
+    # visualize_pose_with_origin(T_base2obj)
 
     rx, ry, rz = euler_zyx(R_base)
     rx_d, ry_d, rz_d = np.degrees([rx, ry, rz])
-    
+
     print("退回10cm后 x y z (m):", *[f"{v:.8f}" for v in p_base])
     print("退回10cm后 rx ry rz (deg):", *[f"{v:.8f}" for v in (rx_d, ry_d, rz_d)])
     print("退回10cm后再退15cm x y z (m):", *[f"{v:.8f}" for v in p_mid])
-    X_mid,Y_mid,Z_mid=map(to_um,p_mid)
+    X_mid, Y_mid, Z_mid = map(to_um, p_mid)
 
     X, Y, Z = map(to_um, p_base)
 
     # 2) SDK期望：位置=mm*1e3(即 μm)，角度=deg*1e3(毫度)
-    RX, RY, RZ = deg_to_mdeg(to_range_minus90_90(rx0_d)), deg_to_mdeg(to_range_minus90_90(ry0_d)+85), deg_to_mdeg(to_range_minus90_90(rz0_d))
+    RX, RY, RZ = (
+        deg_to_mdeg(to_range_minus90_90(rx0_d)),
+        deg_to_mdeg(to_range_minus90_90(ry0_d) + 85),
+        deg_to_mdeg(to_range_minus90_90(rz0_d)),
+    )
 
     print("Target (um, mdeg):", X, Y, Z, RX, RY, RZ)
 
@@ -193,14 +213,14 @@ def run_pipline(R_cam, t_cam, width):
     piper.ConnectPort()
     while not piper.EnablePiper():
         time.sleep(0.01)
-    piper.GripperCtrl(0,1000,0x02, 0)
-    piper.GripperCtrl(0,1000,0x01, 0)
+    piper.GripperCtrl(0, 1000, 0x02, 0)
+    piper.GripperCtrl(0, 1000, 0x01, 0)
     # 1)张开两只夹爪（如有）
-    range=90
-    count=0
+    range = 90
+    count = 0
     while True:
-        count+=1
-        piper.GripperCtrl(abs(round(range*1000)), 1000, 0x01, 0)
+        count += 1
+        piper.GripperCtrl(abs(round(range * 1000)), 1000, 0x01, 0)
         g = piper.GetArmGripperMsgs().gripper_state.grippers_angle
         if g > 80000:
             break
@@ -224,17 +244,17 @@ def run_pipline(R_cam, t_cam, width):
     print("已下到水杯位置")
 
     # 4) 收拢夹爪（抓水杯）
-    grip_range = int(width * 1e6)*0.5
-    range=0
-    count=0
+    grip_range = int(width * 1e6) * 0.5
+    range = 0
+    count = 0
     while True:
-        count+=1
-        #print(piper.GetArmGripperMsgs())
-        if count==500:
-            range=500
-            count=0
-        elif count==100:
-            range=0
+        count += 1
+        # print(piper.GetArmGripperMsgs())
+        if count == 500:
+            range = 500
+            count = 0
+        elif count == 100:
+            range = 0
         piper.GripperCtrl(abs(round(grip_range)), 1000, 0x01, 0)
         g = piper.GetArmGripperMsgs().gripper_state.grippers_angle
         if g > 80000:
@@ -248,10 +268,10 @@ def run_pipline(R_cam, t_cam, width):
     move_with_check(piper, X, Y, target_Z, RX, RY, RZ)
     print("✅ 已成功抓起水杯")
 
-    #move_with_check(piper, 520_000, -460_000, 310_000, 60_000, 90_000, 0)
-    #range=0
-    #count=0
-    #while True:
+    # move_with_check(piper, 520_000, -460_000, 310_000, 60_000, 90_000, 0)
+    # range=0
+    # count=0
+    # while True:
     #    count+=1
     #    #print(piper.GetArmGripperMsgs())
     #    if count==500:
@@ -264,28 +284,29 @@ def run_pipline(R_cam, t_cam, width):
     #    if g > 80000:
     #        break
     #    time.sleep(0.005)
-    #print("已收拢夹爪")
-    #time.sleep(2.0)
-    #piper.JointCtrl(0, 0, 0, 0, 0, 0)
-    #piper.GripperCtrl(abs(0), 1000, 0x01, 0)
+    # print("已收拢夹爪")
+    # time.sleep(2.0)
+    # piper.JointCtrl(0, 0, 0, 0, 0, 0)
+    # piper.GripperCtrl(abs(0), 1000, 0x01, 0)
 
 
 if __name__ == "__main__":
-
-
-# ==== 创建实验保存目录 ====
+    # ==== 创建实验保存目录 ====
     parser = argparse.ArgumentParser()
-    parser.add_argument('--checkpoint_path', default="/home/wqz/anygrasp_sdk/grasp_detection/log/checkpoint_detection.tar",help='Model checkpoint path')
-    parser.add_argument('--max_gripper_width', type=float, default=0.1, help='Maximum gripper width (<=0.1m)')
-    parser.add_argument('--gripper_height', type=float, default=0.03, help='Gripper height')
-    parser.add_argument('--top_down_grasp', default=True,action='store_true', help='Output top-down grasps.')
-    parser.add_argument('--debug', default=True,action='store_true', help='Enable debug mode')
-    parser.add_argument('--save_dir', default='debug/funny', help='Directory to save captured frame')
+    parser.add_argument("--checkpoint_path", required=True, help="Model checkpoint path")
+    parser.add_argument(
+        "--max_gripper_width", type=float, default=0.1, help="Maximum gripper width (<=0.1m)"
+    )
+    parser.add_argument("--gripper_height", type=float, default=0.03, help="Gripper height")
+    parser.add_argument(
+        "--top_down_grasp", default=True, action="store_true", help="Output top-down grasps."
+    )
+    parser.add_argument("--debug", default=True, action="store_true", help="Enable debug mode")
+    parser.add_argument(
+        "--save_dir", default="debug/funny", help="Directory to save captured frame"
+    )
     cfgs = parser.parse_args()
     cfgs.max_gripper_width = max(0, min(0.1, cfgs.max_gripper_width))
     save_dir = capture_one_frame(cfgs.save_dir)
-    R_cam, t_cam, width=run_anygrasp(save_dir,cfgs,data_dir=save_dir)
-    run_pipline(R_cam, t_cam, width)
-    
-
-
+    R_cam, t_cam, width = run_anygrasp(save_dir, cfgs, data_dir=save_dir)
+    run_pipeline(R_cam, t_cam, width)

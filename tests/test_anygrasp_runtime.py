@@ -52,9 +52,11 @@ class AnyGraspRuntimeTests(unittest.TestCase):
             self.assertEqual(actual, expected.resolve())
 
     def test_matching_binary_rejects_non_linux_platform(self) -> None:
-        with mock.patch.object(anygrasp_runtime.platform, "system", return_value="Darwin"):
-            with self.assertRaisesRegex(RuntimeError, "Linux x86-64"):
-                anygrasp_runtime.matching_gsnet_path()
+        with (
+            mock.patch.object(anygrasp_runtime.platform, "system", return_value="Darwin"),
+            self.assertRaisesRegex(RuntimeError, "Linux x86-64"),
+        ):
+            anygrasp_runtime.matching_gsnet_path()
 
     def test_create_detector_uses_project_license_and_working_directory(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -82,9 +84,11 @@ class AnyGraspRuntimeTests(unittest.TestCase):
             self.assertEqual(calls, [(root.resolve(), config)])
 
     def test_create_detector_requires_new_license_layout(self) -> None:
-        with tempfile.TemporaryDirectory() as value:
-            with self.assertRaisesRegex(FileNotFoundError, "licenseCfg.json"):
-                anygrasp_runtime.create_detector(SimpleNamespace(), value)
+        with (
+            tempfile.TemporaryDirectory() as value,
+            self.assertRaisesRegex(FileNotFoundError, "licenseCfg.json"),
+        ):
+            anygrasp_runtime.create_detector(SimpleNamespace(), value)
 
     def test_predict_grasps_maps_workspace_and_top_down_options(self) -> None:
         group = FakeGraspGroup()

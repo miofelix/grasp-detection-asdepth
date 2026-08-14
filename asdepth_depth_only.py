@@ -24,9 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="使用离线 RGB-D 图像运行所选深度模型（不需要 AnyGrasp/RealSense/Piper）",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument(
-        "--depth-checkpoint", required=True, help="深度模型 checkpoint 路径"
-    )
+    parser.add_argument("--depth-checkpoint", required=True, help="深度模型 checkpoint 路径")
     parser.add_argument(
         "--depth-model",
         choices=["defm_vit_l14_depth", "defm_stackconv_depth"],
@@ -35,12 +33,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--rgb-image", required=True, help="离线 RGB 图像路径")
     parser.add_argument("--depth-image", required=True, help="离线 raw depth 图像路径")
-    parser.add_argument(
-        "--save-dir", default="debug/asdepth-only", help="运行产物根目录"
-    )
-    parser.add_argument(
-        "--device", default="auto", help="推理设备，例如 mps、cpu、cuda、cuda:0"
-    )
+    parser.add_argument("--save-dir", default="debug/asdepth-only", help="运行产物根目录")
+    parser.add_argument("--device", default="auto", help="推理设备，例如 mps、cpu、cuda、cuda:0")
     parser.add_argument(
         "--depth-scale", type=float, default=1000.0, help="raw depth 到 meter 的除数"
     )
@@ -97,9 +91,7 @@ def _load_rgbd_files(
     if depth.ndim != 2:
         raise ValueError(f"raw depth image must be single-channel, got {depth.shape}")
     if depth.shape != color.shape[:2]:
-        raise ValueError(
-            f"RGB/depth spatial mismatch: rgb={color.shape[:2]}, depth={depth.shape}"
-        )
+        raise ValueError(f"RGB/depth spatial mismatch: rgb={color.shape[:2]}, depth={depth.shape}")
     return (
         np.ascontiguousarray(color, dtype=np.uint8),
         np.ascontiguousarray(depth),
@@ -113,9 +105,16 @@ def _clear_model_cache() -> None:
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        mps = getattr(torch, "mps", None)
-        if mps is not None and hasattr(mps, "empty_cache"):
-            mps.empty_cache()
+        mps_backend = getattr(torch.backends, "mps", None)
+        mps_runtime = getattr(torch, "mps", None)
+        if (
+            mps_backend is not None
+            and callable(getattr(mps_backend, "is_available", None))
+            and mps_backend.is_available()
+            and mps_runtime is not None
+            and callable(getattr(mps_runtime, "empty_cache", None))
+        ):
+            mps_runtime.empty_cache()
     except ImportError:
         return
 
@@ -126,9 +125,7 @@ def _write_metadata(path: Path, metadata: dict[str, Any]) -> None:
 
 
 def run(args: argparse.Namespace) -> dict[str, str]:
-    depth_checkpoint = _resolve_file(
-        args.depth_checkpoint, label="depth model checkpoint"
-    )
+    depth_checkpoint = _resolve_file(args.depth_checkpoint, label="depth model checkpoint")
     rgb_path = _resolve_file(args.rgb_image, label="RGB image")
     depth_path = _resolve_file(args.depth_image, label="raw depth image")
     run_dir = _new_run_dir(args.save_dir)

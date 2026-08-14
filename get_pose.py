@@ -1,13 +1,15 @@
-import os
 import argparse
-import numpy as np
+import datetime
+import os
+
 import cv2
+import numpy as np
 import open3d as o3d
-from PIL import Image
 import pyrealsense2 as rs
+from PIL import Image
 
 from anygrasp_runtime import create_detector, predict_grasps
-import datetime
+
 # ----------------- 参数 -----------------
 
 
@@ -58,17 +60,18 @@ def capture_one_frame(base_dir):
 
     return save_dir
 
+
 # ----------------- AnyGrasp Demo -----------------
-def run_anygrasp(save_dir,cfgs,data_dir=None,rgb=None,depth=None):
+def run_anygrasp(save_dir, cfgs, data_dir=None, rgb=None, depth=None):
     detector = create_detector(cfgs)
     # 读取图像
-    colors=None
-    depths=None
-    points_z=None
+    colors = None
+    depths = None
+    points_z = None
     if data_dir is not None:
-        colors = np.array(Image.open(os.path.join(data_dir, 'color.png')), dtype=np.float32) / 255.0
-        depths = np.array(Image.open(os.path.join(data_dir, 'depth.png')))
-        points_z = depths/1000.0
+        colors = np.array(Image.open(os.path.join(data_dir, "color.png")), dtype=np.float32) / 255.0
+        depths = np.array(Image.open(os.path.join(data_dir, "depth.png")))
+        points_z = depths / 1000.0
     else:
         colors = rgb
         colors = cv2.cvtColor(colors, cv2.COLOR_BGR2RGB)  # 转成 RGB
@@ -76,8 +79,8 @@ def run_anygrasp(save_dir,cfgs,data_dir=None,rgb=None,depth=None):
         depths = depth
         points_z = depths
     # 相机内参（要改成你的相机参数）
-    fx, fy = 616.22601724,615.78839082
-    cx, cy = 315.33494299,251.59150012
+    fx, fy = 616.22601724, 615.78839082
+    cx, cy = 315.33494299, 251.59150012
     xmin, xmax = -0.10, 0.10
     ymin, ymax = -0.2, 0.07
     zmin, zmax = 0.2, 1.0
@@ -85,7 +88,7 @@ def run_anygrasp(save_dir,cfgs,data_dir=None,rgb=None,depth=None):
 
     # 点云计算
     xmap, ymap = np.meshgrid(np.arange(depths.shape[1]), np.arange(depths.shape[0]))
-    
+
     points_x = (xmap - cx) / fx * points_z
     points_y = (ymap - cy) / fy * points_z
 
@@ -116,15 +119,13 @@ def run_anygrasp(save_dir,cfgs,data_dir=None,rgb=None,depth=None):
     print("Top grasp scores:", gg_pick.scores)
     print("得分最高的物体位姿：", gg[0])
     print("最高分 grasp score:", gg_pick[0].score)
-    
-
 
     # 可视化
     if cfgs.debug:
         cloud = o3d.geometry.PointCloud()
         cloud.points = o3d.utility.Vector3dVector(points)
         cloud.colors = o3d.utility.Vector3dVector(colors)
-        trans_mat = np.array([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
+        trans_mat = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
         cloud.transform(trans_mat)
         grippers = gg.to_open3d_geometry_list()
         cloud_path = os.path.join(save_dir, "scene_cloud_14b.ply")
@@ -134,17 +135,23 @@ def run_anygrasp(save_dir,cfgs,data_dir=None,rgb=None,depth=None):
             gripper.transform(trans_mat)
         o3d.visualization.draw_geometries([*grippers, cloud])
         o3d.visualization.draw_geometries([grippers[0], cloud])
-    return gg[0].rotation_matrix,gg[0].translation,gg[0].width
+    return gg[0].rotation_matrix, gg[0].translation, gg[0].width
+
+
 # ----------------- 主程序 -----------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--checkpoint_path', default="/home/wqz/anygrasp_sdk/grasp_detection/log/checkpoint_detection.tar",help='Model checkpoint path')
-    parser.add_argument('--max_gripper_width', type=float, default=0.1, help='Maximum gripper width (<=0.1m)')
-    parser.add_argument('--gripper_height', type=float, default=0.03, help='Gripper height')
-    parser.add_argument('--top_down_grasp', action='store_true', help='Output top-down grasps.')
-    parser.add_argument('--debug', default=True,action='store_true', help='Enable debug mode')
-    parser.add_argument('--save_dir', default='debug/funny', help='Directory to save captured frame')
+    parser.add_argument("--checkpoint_path", required=True, help="Model checkpoint path")
+    parser.add_argument(
+        "--max_gripper_width", type=float, default=0.1, help="Maximum gripper width (<=0.1m)"
+    )
+    parser.add_argument("--gripper_height", type=float, default=0.03, help="Gripper height")
+    parser.add_argument("--top_down_grasp", action="store_true", help="Output top-down grasps.")
+    parser.add_argument("--debug", default=True, action="store_true", help="Enable debug mode")
+    parser.add_argument(
+        "--save_dir", default="debug/funny", help="Directory to save captured frame"
+    )
     cfgs = parser.parse_args()
     cfgs.max_gripper_width = max(0, min(0.1, cfgs.max_gripper_width))
     save_dir = capture_one_frame(cfgs.save_dir)
-    run_anygrasp(save_dir,cfgs)
+    run_anygrasp(save_dir, cfgs)

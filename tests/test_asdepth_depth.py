@@ -124,9 +124,7 @@ class CheckpointTests(unittest.TestCase):
                 "load_checkpoint",
                 return_value=({"weight": torch.ones(1, 1)}, report),
             ),
-            mock.patch.object(
-                depth_api, "_create_model", return_value=toy_model
-            ) as create_model,
+            mock.patch.object(depth_api, "_create_model", return_value=toy_model) as create_model,
         ):
             loaded = depth_api.load_depth_model(
                 "model.ckpt",

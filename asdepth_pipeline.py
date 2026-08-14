@@ -21,9 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="使用本地 RGB-D 深度模型的抓取流水线",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument(
-        "--depth-checkpoint", required=True, help="深度模型 checkpoint 路径"
-    )
+    parser.add_argument("--depth-checkpoint", required=True, help="深度模型 checkpoint 路径")
     parser.add_argument(
         "--depth-model",
         choices=["defm_vit_l14_depth", "defm_stackconv_depth"],
@@ -35,16 +33,10 @@ def build_parser() -> argparse.ArgumentParser:
         default="ckpts/checkpoint-rs.tar",
         help="AnyGrasp checkpoint 路径",
     )
-    parser.add_argument(
-        "--rgb-image", help="离线 RGB 图像；必须与 --depth-image 同时提供"
-    )
-    parser.add_argument(
-        "--depth-image", help="离线 raw depth 图像；必须与 --rgb-image 同时提供"
-    )
+    parser.add_argument("--rgb-image", help="离线 RGB 图像；必须与 --depth-image 同时提供")
+    parser.add_argument("--depth-image", help="离线 raw depth 图像；必须与 --rgb-image 同时提供")
     parser.add_argument("--save-dir", default="debug/asdepth", help="运行产物根目录")
-    parser.add_argument(
-        "--device", default="auto", help="深度模型推理设备，例如 cuda、cuda:0、cpu"
-    )
+    parser.add_argument("--device", default="auto", help="深度模型推理设备，例如 cuda、cuda:0、cpu")
     parser.add_argument("--depth-scale", type=float, default=1000.0)
     parser.add_argument(
         "--max-depth", type=float, default=10.0, help="raw depth 有效上限，单位 meter"
@@ -62,9 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
     )
-    parser.add_argument(
-        "--debug", action="store_true", help="开启 AnyGrasp Open3D 可视化"
-    )
+    parser.add_argument("--debug", action="store_true", help="开启 AnyGrasp Open3D 可视化")
     parser.add_argument(
         "--execute-arm",
         action="store_true",
@@ -120,9 +110,7 @@ def _load_rgbd_files(
     if depth.ndim != 2:
         raise ValueError(f"raw depth image must be single-channel, got {depth.shape}")
     if depth.shape != color.shape[:2]:
-        raise ValueError(
-            f"RGB/depth spatial mismatch: rgb={color.shape[:2]}, depth={depth.shape}"
-        )
+        raise ValueError(f"RGB/depth spatial mismatch: rgb={color.shape[:2]}, depth={depth.shape}")
     return (
         np.ascontiguousarray(color, dtype=np.uint8),
         np.ascontiguousarray(depth),
@@ -140,9 +128,9 @@ def _load_anygrasp_functions() -> tuple[Callable[[str], str], Callable[..., Any]
 
 
 def _load_arm_runner() -> Callable[[np.ndarray, np.ndarray, float], Any]:
-    from grasp_piper import run_pipline
+    from grasp_piper import run_pipeline
 
-    return run_pipline
+    return run_pipeline
 
 
 def _clear_model_cache() -> None:
@@ -166,9 +154,7 @@ def _write_grasp_pose(
         stream.write("R_cam:\n")
         stream.write(np.array2string(rotation, precision=6, suppress_small=True))
         stream.write("\n\nt_cam:\n")
-        stream.write(
-            np.array2string(translation.reshape(-1), precision=6, suppress_small=True)
-        )
+        stream.write(np.array2string(translation.reshape(-1), precision=6, suppress_small=True))
         stream.write(f"\n\nwidth: {width}\n")
 
 
@@ -189,9 +175,7 @@ def _grasp_config(args: argparse.Namespace, checkpoint: Path) -> SimpleNamespace
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    depth_checkpoint = _resolve_file(
-        args.depth_checkpoint, label="depth model checkpoint"
-    )
+    depth_checkpoint = _resolve_file(args.depth_checkpoint, label="depth model checkpoint")
     grasp_checkpoint = _resolve_file(args.grasp_checkpoint, label="AnyGrasp checkpoint")
     capture_one_frame, run_anygrasp = _load_anygrasp_functions()
 

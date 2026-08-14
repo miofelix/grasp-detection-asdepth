@@ -37,9 +37,7 @@ def extract_state_dict(payload: Any) -> tuple[StateDict, str]:
     """从常见 PyTorch checkpoint envelope 提取纯 state_dict。"""
 
     if not isinstance(payload, Mapping):
-        raise TypeError(
-            f"checkpoint payload must be a mapping, got {type(payload).__name__}"
-        )
+        raise TypeError(f"checkpoint payload must be a mapping, got {type(payload).__name__}")
     for key in STATE_KEYS:
         candidate = payload.get(key)
         if isinstance(candidate, Mapping):
@@ -88,9 +86,7 @@ def load_checkpoint(
     path = Path(checkpoint).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(path)
-    raw_state, source_key = extract_state_dict(
-        _torch_load(path, trusted_pickle=trusted_pickle)
-    )
+    raw_state, source_key = extract_state_dict(_torch_load(path, trusted_pickle=trusted_pickle))
     state_dict, stripped = _strip_prefixes(raw_state)
     return state_dict, CheckpointLoadReport(
         path=path,

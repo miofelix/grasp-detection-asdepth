@@ -52,9 +52,7 @@ class DepthOnlyPipelineTests(unittest.TestCase):
                 model_id="defm_vit_l14_depth",
             )
             with (
-                mock.patch.object(
-                    asdepth_depth, "load_depth_model", return_value=loaded
-                ),
+                mock.patch.object(asdepth_depth, "load_depth_model", return_value=loaded),
                 mock.patch.object(
                     asdepth_depth,
                     "predict_depth",
@@ -92,6 +90,16 @@ class DepthOnlyPipelineTests(unittest.TestCase):
                 ]
             )
             self.assertEqual(exit_code, 2)
+
+    def test_clear_model_cache_skips_unavailable_mps_backend(self) -> None:
+        with (
+            mock.patch.object(torch.cuda, "is_available", return_value=False),
+            mock.patch.object(torch.backends.mps, "is_available", return_value=False),
+            mock.patch.object(torch.mps, "empty_cache") as empty_cache,
+        ):
+            asdepth_depth_only._clear_model_cache()
+
+        empty_cache.assert_not_called()
 
 
 if __name__ == "__main__":

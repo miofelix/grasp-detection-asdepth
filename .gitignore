@@ -6,6 +6,15 @@ ckpts/*
 logs/
 debug/
 .venv/
+.serena/
+.pytest_cache/
+.ruff_cache/
+
+# Python 构建与工具产物
+build/
+dist/
+*.egg-info/
+*.log
 
 # AnyGrasp 运行时文件：按当前 Python ABI 选择 gsnet_versions 中的官方二进制，
 # 新许可证由用户放到仓库根目录，均不得提交。
